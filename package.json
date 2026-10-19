@@ -1,0 +1,12 @@
+{
+  "name": "fuehrungsfunk",
+  "private": true,
+  "description": "Führungsfunk und Audioguide für Gruppenführungen (Grenzspaziergang)",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

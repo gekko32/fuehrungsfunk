@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Führung senden</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root { --bg:#f6f4ef; --text:#1f2421; --muted:#5d655f; --go:#2f6b4f; --stop:#b3392f; --card:#fff; --line:#ddd8cc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161917; --text:#ecefea; --muted:#a3aba5; --go:#3f8f68; --stop:#c9493e; --card:#202421; --line:#343a36; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:18px/1.45 system-ui, sans-serif; padding:16px; }
+  main { max-width:420px; margin:0 auto; text-align:center; }
+  h1 { font-size:1.4rem; margin:.5rem 0 1rem; }
+  button { width:100%; border:0; border-radius:16px; padding:1.4rem 1rem; font-size:1.4rem; font-weight:600; color:#fff; background:var(--go); cursor:pointer; }
+  button.an { background:var(--stop); }
+  .pegel { height:14px; background:var(--card); border:1px solid var(--line); border-radius:7px; overflow:hidden; margin:1rem 0 .5rem; }
+  .pegel div { height:100%; width:0; background:var(--go); transition:width .08s; }
+  #info { color:var(--muted); font-size:1rem; min-height:1.5em; }
+  .qr { background:#fff; padding:14px; border-radius:12px; display:inline-block; margin-top:1.5rem; }
+  .link { word-break:break-all; font-size:.9rem; color:var(--muted); margin-top:.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Führung senden</h1>
+  <button id="los">● Sendung starten</button>
+  <div class="pegel"><div id="pegel"></div></div>
+  <div id="info">Noch nicht auf Sendung</div>
+  <div class="qr" id="qr"></div>
+  <div class="link" id="link"></div>
+  <p class="link">Diesen Code der Gruppe zeigen. Der Bildschirm bleibt während der Sendung an.</p>
+</main>
+<script>
+  const k = new URLSearchParams(location.search).get('k');
+  const hoerLink = location.origin + '/';
+  new QRCode(document.getElementById('qr'), { text: hoerLink, width: 220, height: 220 });
+  document.getElementById('link').textContent = hoerLink;
+
+  const los = document.getElementById('los'), info = document.getElementById('info'), pegel = document.getElementById('pegel');
+  let ws, rec, stream, wake, ctx, an = false;
+
+  async function starten() {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    pegelAnzeigen(stream);
+    try { wake = await navigator.wakeLock.request('screen'); } catch {}
+    verbinden();
+    an = true; los.textContent = '■ Sendung beenden'; los.classList.add('an');
+  }
+
+  function verbinden() {
+    ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws?k=' + encodeURIComponent(k));
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      const typ = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
+      rec = new MediaRecorder(stream, typ ? { mimeType: typ, audioBitsPerSecond: 64000 } : {});
+      rec.ondataavailable = (e) => { if (e.data.size && ws.readyState === 1) ws.send(e.data); };
+      rec.start(250);
+      info.textContent = 'Live';
+      zaehlen();
+    };
+    // Verbindung weg (Funkloch): neu aufbauen, solange gesendet werden soll.
+    ws.onclose = (e) => {
+      if (rec && rec.state !== 'inactive') rec.stop();
+      // Ein anderes Gerät hat die Sendung übernommen: nicht zurückdrängeln.
+      if (e.code === 4000) { an = false; stream.getTracks().forEach((t) => t.stop()); if (wake) wake.release(); los.textContent = '● Sendung starten'; los.classList.remove('an'); info.textContent = 'Ein anderes Gerät sendet jetzt.'; return; }
+      if (an) { info.textContent = 'Verbindung unterbrochen, verbinde neu …'; setTimeout(verbinden, 2000); }
+    };
+  }
+
+  function stoppen() {
+    an = false;
+    if (rec && rec.state !== 'inactive') rec.stop();
+    if (ws) ws.close();
+    stream.getTracks().forEach((t) => t.stop());
+    if (wake) wake.release();
+    if (ctx) ctx.close();
+    los.textContent = '● Sendung starten'; los.classList.remove('an');
+    info.textContent = 'Sendung beendet'; pegel.style.width = '0';
+  }
+
+  function pegelAnzeigen(s) {
+    ctx = new AudioContext();
+    const ana = ctx.createAnalyser(); ana.fftSize = 512;
+    ctx.createMediaStreamSource(s).connect(ana);
+    const d = new Uint8Array(ana.fftSize);
+    (function f() {
+      if (ctx.state === 'closed') return;
+      ana.getByteTimeDomainData(d);
+      let m = 0; for (const v of d) m = Math.max(m, Math.abs(v - 128));
+      pegel.style.width = Math.min(100, m / 1.28 * 1.5) + '%';
+      requestAnimationFrame(f);
+    })();
+  }
+
+  async function zaehlen() {
+    if (!an) return;
+    try {
+      const s = await (await fetch('/status', { cache: 'no-store' })).json();
+      if (ws && ws.readyState === 1) info.textContent = 'Live · ' + s.hoerer + (s.hoerer === 1 ? ' Person hört zu' : ' Personen hören zu');
+    } catch {}
+    setTimeout(zaehlen, 4000);
+  }
+
+  los.onclick = () => (an ? stoppen() : starten().catch((e) => { info.textContent = 'Mikrofon nicht freigegeben: ' + e.message; }));
+</script>
+</body>
+</html>

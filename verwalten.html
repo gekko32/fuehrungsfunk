@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audioguide verwalten</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root { --bg:#f6f4ef; --text:#1f2421; --muted:#5d655f; --accent:#2f6b4f; --accent-text:#fff; --stop:#b3392f; --card:#fff; --line:#ddd8cc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161917; --text:#ecefea; --muted:#a3aba5; --accent:#5fae86; --accent-text:#0d1410; --stop:#d0574c; --card:#202421; --line:#343a36; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:17px/1.45 system-ui, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.4rem; margin:.5rem 0 1rem; }
+  h2 { font-size:1.15rem; margin:2rem 0 .75rem; }
+  section.karte, .station { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:1rem; margin-bottom:.9rem; }
+  button, .knopf { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--text); border-radius:10px; padding:.55rem .9rem; cursor:pointer; }
+  button.haupt { background:var(--accent); color:var(--accent-text); border-color:var(--accent); font-weight:600; }
+  button.rot { color:var(--stop); }
+  button.aufnahme { background:var(--stop); color:#fff; border-color:var(--stop); }
+  input[type=text], textarea, select { font:inherit; width:100%; padding:.55rem .7rem; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); }
+  textarea { min-height:8rem; resize:vertical; }
+  label { display:block; font-size:.85rem; color:var(--muted); margin:.75rem 0 .25rem; }
+  .zeile { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+  .kopf { display:flex; gap:.6rem; align-items:center; }
+  .kopf .nr { flex:none; width:2.2rem; height:2.2rem; border-radius:50%; background:var(--accent); color:var(--accent-text); display:grid; place-items:center; font-weight:700; }
+  .kopf input { flex:1; font-weight:600; }
+  audio { width:100%; margin:.25rem 0; }
+  .fotos { display:flex; gap:.5rem; flex-wrap:wrap; }
+  .foto { position:relative; }
+  .foto img { width:120px; height:90px; object-fit:cover; border-radius:8px; display:block; }
+  .foto button { position:absolute; top:4px; right:4px; padding:.1rem .45rem; }
+  .hinweis { color:var(--muted); font-size:.85rem; min-height:1.2em; }
+  .qr { background:#fff; padding:14px; border-radius:12px; display:inline-block; margin-top:1rem; }
+  .code { font-size:1.6rem; letter-spacing:.15em; font-weight:700; margin-top:.5rem; }
+  .datei { position:relative; overflow:hidden; display:inline-block; }
+  .datei input { position:absolute; inset:0; opacity:0; cursor:pointer; }
+  ul.runden { padding-left:1.1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Audioguide verwalten</h1>
+
+  <section class="karte">
+    <strong>Runde freischalten</strong>
+    <p class="hinweis">Für jede Führung neu. Die Gruppe scannt den Code und kann die Stationen so lange hören, wie die Runde gilt.</p>
+    <div class="zeile">
+      <select id="dauer" style="width:auto">
+        <option value="4">4 Stunden</option>
+        <option value="24" selected>bis morgen (24 Std.)</option>
+        <option value="168">1 Woche</option>
+      </select>
+      <button class="haupt" id="neueRunde">Neue Runde</button>
+    </div>
+    <div id="rundeAnzeige"></div>
+    <ul class="runden" id="runden"></ul>
+  </section>
+
+  <h2>Stationen</h2>
+  <div id="stationen"></div>
+  <div class="zeile">
+    <button class="haupt" id="neu">+ Station hinzufügen</button>
+    <a class="knopf" id="vorschau" target="_blank">Ansicht der Teilnehmer</a>
+  </div>
+</main>
+<script>
+  const k = new URLSearchParams(location.search).get('k');
+  const H = { 'X-Schluessel': k };
+  const medien = (d) => '/guide/medien/' + d + '?k=' + encodeURIComponent(k);
+  document.getElementById('vorschau').href = '/guide?k=' + encodeURIComponent(k);
+  let st = [];
+
+  async function api(methode, pfad, body, typ) {
+    const r = await fetch('/guide/api/' + pfad, { method: methode, headers: { ...H, ...(typ ? { 'Content-Type': typ } : {}) }, body });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.fehler || 'Fehler');
+    return d;
+  }
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------- Runden ----------
+  const uhr = (t) => new Date(t).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  async function rundenLaden() {
+    const r = await api('GET', 'runden');
+    document.getElementById('runden').innerHTML = r.map((x) =>
+      '<li>' + x.code + ' – gilt bis ' + uhr(x.bis) + ' <button class="rot" data-code="' + x.code + '">beenden</button> <button data-zeige="' + x.code + '">QR zeigen</button></li>').join('');
+  }
+  function qrZeigen(code) {
+    const link = location.origin + '/g/' + code;
+    const box = document.getElementById('rundeAnzeige');
+    box.innerHTML = '<div class="qr" id="qr"></div><div class="code">' + code + '</div><div class="hinweis">' + link + '</div>';
+    new QRCode(document.getElementById('qr'), { text: link, width: 220, height: 220 });
+  }
+  document.getElementById('neueRunde').onclick = async () => {
+    const r = await api('POST', 'runde', JSON.stringify({ stunden: Number(document.getElementById('dauer').value) }), 'application/json');
+    qrZeigen(r.code); rundenLaden();
+  };
+  document.getElementById('runden').onclick = async (e) => {
+    if (e.target.dataset.code) { await api('DELETE', 'runde/' + e.target.dataset.code); document.getElementById('rundeAnzeige').innerHTML = ''; rundenLaden(); }
+    if (e.target.dataset.zeige) qrZeigen(e.target.dataset.zeige);
+  };
+
+  // ---------- Stationen ----------
+  async function laden() { st = (await api('GET', 'stationen')).stationen; zeichnen(); }
+
+  function zeichnen() {
+    document.getElementById('stationen').innerHTML = st.map((s, i) => `
+      <div class="station" data-id="${s.id}">
+        <div class="kopf"><span class="nr">${i + 1}</span><input type="text" data-feld="titel" value="${esc(s.titel)}" aria-label="Titel"></div>
+        <label>Text (wird beim Hören angezeigt)</label>
+        <textarea data-feld="text">${esc(s.text)}</textarea>
+        <label>Ton</label>
+        ${s.audio ? `<audio controls preload="none" src="${medien(s.audio)}"></audio>` : '<div class="hinweis">Noch keine Aufnahme.</div>'}
+        <div class="zeile">
+          <button data-tun="aufnehmen">● Aufnehmen</button>
+          <span class="knopf datei">Datei wählen<input type="file" accept="audio/*" data-tun="tondatei"></span>
+          ${s.audio ? '<button class="rot" data-tun="tonweg">Ton löschen</button>' : ''}
+        </div>
+        <label>Fotos (höchstens 2)</label>
+        <div class="fotos">
+          ${s.fotos.map((f) => `<div class="foto"><img src="${medien(f)}" alt=""><button class="rot" data-tun="fotoweg" data-foto="${f}" aria-label="Foto löschen">×</button></div>`).join('')}
+          ${s.fotos.length < 2 ? '<span class="knopf datei">+ Foto<input type="file" accept="image/*" data-tun="foto"></span>' : ''}
+        </div>
+        <div class="hinweis" data-hinweis></div>
+        <div class="zeile" style="margin-top:.5rem">
+          <button data-tun="hoch" ${i ? '' : 'disabled'}>↑</button>
+          <button data-tun="runter" ${i < st.length - 1 ? '' : 'disabled'}>↓</button>
+          <span style="flex:1"></span>
+          <button class="rot" data-tun="loeschen">Station löschen</button>
+        </div>
+      </div>`).join('');
+  }
+
+  const karte = (el) => el.closest('.station');
+  const hinweis = (el, t) => { karte(el).querySelector('[data-hinweis]').textContent = t; };
+  const ersetzen = (s) => { st[st.findIndex((x) => x.id === s.id)] = s; zeichnen(); };
+
+  // Titel und Text speichern sich beim Verlassen des Feldes.
+  document.getElementById('stationen').addEventListener('change', async (e) => {
+    const el = e.target, id = karte(el).dataset.id;
+    if (el.dataset.feld) {
+      try { const s = await api('PUT', 'station/' + id, JSON.stringify({ [el.dataset.feld]: el.value }), 'application/json'); st[st.findIndex((x) => x.id === id)] = s; hinweis(el, 'Gespeichert.'); }
+      catch (x) { hinweis(el, 'Nicht gespeichert: ' + x.message); }
+    }
+    if (el.dataset.tun === 'tondatei' && el.files[0]) { hinweis(el, 'Lade Ton hoch …'); tonHoch(id, el.files[0], el); }
+    if (el.dataset.tun === 'foto' && el.files[0]) {
+      hinweis(el, 'Lade Foto hoch …');
+      try { ersetzen(await api('POST', 'station/' + id + '/foto', await verkleinern(el.files[0]), 'image/jpeg')); }
+      catch (x) { hinweis(el, 'Foto ging nicht: ' + x.message); }
+    }
+  });
+
+  async function tonHoch(id, blob, el) {
+    try { ersetzen(await api('PUT', 'station/' + id + '/audio', blob, blob.type || 'application/octet-stream')); }
+    catch (x) { hinweis(el, 'Ton ging nicht: ' + x.message); }
+  }
+
+  // Fotos im Handy verkleinern; das spart Datenvolumen und entfernt Standortdaten.
+  async function verkleinern(datei) {
+    const bild = await createImageBitmap(datei);
+    const f = Math.min(1, 1600 / Math.max(bild.width, bild.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(bild.width * f); c.height = Math.round(bild.height * f);
+    c.getContext('2d').drawImage(bild, 0, 0, c.width, c.height);
+    return new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.82));
+  }
+
+  let rec = null;
+  document.getElementById('stationen').addEventListener('click', async (e) => {
+    const el = e.target.closest('button'); if (!el || !el.dataset.tun) return;
+    const id = karte(el).dataset.id, i = st.findIndex((x) => x.id === id);
+    const tun = el.dataset.tun;
+
+    if (tun === 'aufnehmen') {
+      if (rec) return;
+      const strom = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const typ = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find((t) => MediaRecorder.isTypeSupported(t));
+      const teile = [];
+      rec = new MediaRecorder(strom, typ ? { mimeType: typ } : {});
+      rec.ondataavailable = (x) => teile.push(x.data);
+      rec.onstop = () => {
+        strom.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(teile, { type: rec.mimeType });
+        rec = null;
+        const url = URL.createObjectURL(blob);
+        const h = karte(el).querySelector('[data-hinweis]');
+        h.innerHTML = 'Probehören: <audio controls src="' + url + '"></audio><div class="zeile"><button class="haupt" data-ok>Speichern</button><button data-weg>Verwerfen</button></div>';
+        h.querySelector('[data-ok]').onclick = () => { h.textContent = 'Speichere …'; tonHoch(id, blob, el); };
+        h.querySelector('[data-weg]').onclick = () => { h.textContent = ''; zeichnen(); };
+      };
+      rec.start();
+      const start = Date.now();
+      el.classList.add('aufnahme'); el.dataset.tun = 'stopp';
+      const zeit = setInterval(() => { if (!rec) return clearInterval(zeit); const s = Math.floor((Date.now() - start) / 1000); el.textContent = '■ Stopp ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }, 250);
+      return;
+    }
+    if (tun === 'stopp') { rec && rec.stop(); return; }
+    if (tun === 'tonweg' && confirm('Aufnahme wirklich löschen?')) ersetzen(await api('DELETE', 'station/' + id + '/audio'));
+    if (tun === 'fotoweg') ersetzen(await api('DELETE', 'station/' + id + '/foto/' + el.dataset.foto));
+    if (tun === 'loeschen' && confirm('Station „' + st[i].titel + '“ mit Ton und Fotos löschen?')) { await api('DELETE', 'station/' + id); laden(); }
+    if (tun === 'hoch' || tun === 'runter') {
+      const j = tun === 'hoch' ? i - 1 : i + 1;
+      [st[i], st[j]] = [st[j], st[i]];
+      await api('PUT', 'reihenfolge', JSON.stringify(st.map((x) => x.id)), 'application/json');
+      zeichnen();
+    }
+  });
+
+  document.getElementById('neu').onclick = async () => { st.push(await api('POST', 'station')); zeichnen(); };
+
+  laden(); rundenLaden();
+</script>
+</body>
+</html>

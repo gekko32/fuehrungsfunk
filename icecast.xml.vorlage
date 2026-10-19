@@ -1,0 +1,34 @@
+<icecast>
+  <!-- Nur intern: die Node-App nimmt den Ton an und reicht ihn an die Hörer weiter. -->
+  <limits>
+    <clients>300</clients>
+    <sources>2</sources>
+    <!-- kleiner Puffer beim Verbinden = weniger Verzögerung -->
+    <queue-size>262144</queue-size>
+    <burst-size>8192</burst-size>
+    <source-timeout>10</source-timeout>
+  </limits>
+  <authentication>
+    <source-password>@SOURCE_PW@</source-password>
+    <relay-password>@RELAY_PW@</relay-password>
+    <admin-user>admin</admin-user>
+    <admin-password>@ADMIN_PW@</admin-password>
+  </authentication>
+  <hostname>localhost</hostname>
+  <listen-socket>
+    <port>8000</port>
+    <bind-address>127.0.0.1</bind-address>
+  </listen-socket>
+  <fileserve>1</fileserve>
+  <paths>
+    <basedir>/usr/share/icecast2</basedir>
+    <logdir>/tmp</logdir>
+    <webroot>/usr/share/icecast2/web</webroot>
+    <adminroot>/usr/share/icecast2/admin</adminroot>
+  </paths>
+  <logging>
+    <accesslog>icecast-access.log</accesslog>
+    <errorlog>icecast-error.log</errorlog>
+    <loglevel>2</loglevel>
+  </logging>
+</icecast>
