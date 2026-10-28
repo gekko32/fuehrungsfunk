@@ -17,7 +17,9 @@ Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern er
 
 | Adresse | Für wen |
 |---|---|
-| `/` | Hörer (Gruppe) |
+| `/h/CODE` | QR-Code der Führung: setzt das Hör-Cookie bis zum Ablauf, dann weiter zu `/` |
+| `/` | Hörer (Gruppe) – nur mit gültigem Hörcode, sonst Hinweis „Führung beendet“ |
+| `/funk-runde?k=SENDE_TOKEN` | Sende-Seite: aktuellen Hörcode lesen (GET) bzw. neuen anlegen (POST, `stunden=`) |
 | `/senden?k=SENDE_TOKEN` | Frank: Sende-Seite mit QR-Code |
 | `/status` | Live-Anzeige, Zuhörerzahl |
 | `/hoer-mp4` (WebSocket) | Hörer-Seite: AAC in MP4, schneller Weg für Chrome, Firefox, Safari |
@@ -28,6 +30,7 @@ Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern er
 
 ## Einstellungen
 
+- Hörcode je Führung (seit 29.10.2026): Die Sende-Seite legt einen Code mit Ablaufzeit an (Standard 4 Stunden, wählbar 2 Std. bis 2 Tage). Ein neuer Code oder der Ablauf beendet alle Hörer mit altem Code. Gespeichert in `daten/funk-runde.json`.
 - `SENDE_TOKEN`: geheimer Teil der Sende- und Verwaltungslinks. Kommt aus dem Kubernetes-Secret `fuehrungsfunk` (Namespace `workspace`), liegt **nicht** in GitHub.
 - `ICECAST_SOURCE_PW`: wird bei jedem Start neu gewürfelt (`start.sh`), verlässt den Container nie.
 - Daten des Audioguides: `/app/daten/` (eigener Speicher, bleibt bei Neustarts erhalten).

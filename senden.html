@@ -19,6 +19,10 @@
   #info { color:var(--muted); font-size:1rem; min-height:1.5em; }
   .qr { background:#fff; padding:14px; border-radius:12px; display:inline-block; margin-top:1.5rem; }
   .link { word-break:break-all; font-size:.9rem; color:var(--muted); margin-top:.5rem; }
+  .neu { display:flex; gap:.5rem; margin-top:1rem; }
+  .neu select, .neu button { font-size:1rem; padding:.8rem; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  .neu button { flex:1; width:auto; font-weight:500; }
+  #gueltig { font-size:1rem; margin-top:.75rem; }
 </style>
 </head>
 <body>
@@ -29,13 +33,36 @@
   <div id="info">Noch nicht auf Sendung</div>
   <div class="qr" id="qr"></div>
   <div class="link" id="link"></div>
-  <p class="link">Diesen Code der Gruppe zeigen. Der Bildschirm bleibt während der Sendung an.</p>
+  <div id="gueltig"></div>
+  <p class="link">Diesen Code der Gruppe zeigen. Er gilt nur für diese Führung. Der Bildschirm bleibt während der Sendung an.</p>
+  <div class="neu">
+    <select id="stunden" aria-label="Gültigkeit"><option value="2">2 Std.</option><option value="4" selected>4 Std.</option><option value="8">8 Std.</option><option value="24">1 Tag</option><option value="48">2 Tage</option></select>
+    <button id="neuerCode" type="button">Neuer Code (nächste Gruppe)</button>
+  </div>
 </main>
 <script>
   const k = new URLSearchParams(location.search).get('k');
-  const hoerLink = location.origin + '/';
-  new QRCode(document.getElementById('qr'), { text: hoerLink, width: 220, height: 220 });
-  document.getElementById('link').textContent = hoerLink;
+  // Hörcode je Führung: Der QR-Code führt zu /h/CODE. Ein neuer Code beendet alte Hörer.
+  const qr = document.getElementById('qr'), link = document.getElementById('link'), gueltig = document.getElementById('gueltig');
+  function zeigeCode(rd) {
+    const hoerLink = location.origin + '/h/' + rd.code;
+    qr.innerHTML = '';
+    new QRCode(qr, { text: hoerLink, width: 220, height: 220 });
+    link.textContent = hoerLink;
+    const bis = new Date(rd.bis);
+    gueltig.textContent = 'Hörcode ' + rd.code + ' · gültig bis ' + bis.toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+  }
+  async function neuerCode() {
+    const st = document.getElementById('stunden').value;
+    const rd = await (await fetch('/funk-runde?k=' + encodeURIComponent(k) + '&stunden=' + st, { method: 'POST' })).json();
+    zeigeCode(rd);
+  }
+  (async () => {
+    // Gibt es noch keinen gültigen Code, gleich einen für 4 Stunden anlegen.
+    const rd = await (await fetch('/funk-runde?k=' + encodeURIComponent(k), { cache: 'no-store' })).json();
+    if (rd) zeigeCode(rd); else neuerCode();
+  })();
+  document.getElementById('neuerCode').onclick = neuerCode;
 
   const los = document.getElementById('los'), info = document.getElementById('info'), pegel = document.getElementById('pegel');
   let ws, rec, stream, wake, ctx, an = false;

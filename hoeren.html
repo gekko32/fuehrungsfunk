@@ -81,7 +81,11 @@
       ws.binaryType = 'arraybuffer';
       ws.onmessage = (e) => { puffer.push(new Uint8Array(e.data)); nachschieben(); };
       // 4001 = neue Sendung: sofort neu verbinden; sonst (Funkloch) nach 2 s.
-      ws.onclose = (e) => { if (an) neuTimer = setTimeout(starten, e.code === 4001 ? 100 : 2000); };
+      ws.onclose = (e) => {
+        // 4002 = Hörcode abgelaufen oder neue Führung: nicht neu verbinden.
+        if (e.code === 4002) { beendet(); return; }
+        if (an) neuTimer = setTimeout(starten, e.code === 4001 ? 100 : 2000);
+      };
     }, { once: true });
     a.play().catch(() => {});
   }
@@ -105,6 +109,12 @@
     if (a.paused && an) a.play().catch(() => {});
   }
 
+  function beendet() {
+    stoppen();
+    play.disabled = true; box.className = '';
+    st.textContent = 'Diese Führung ist beendet. Für eine neue Führung bitte deren QR-Code scannen.';
+  }
+
   function stoppen() {
     an = false; aufraeumen();
     play.textContent = '▶ Zuhören'; neu.hidden = true;
@@ -118,6 +128,7 @@
   async function pruefen() {
     try {
       const s = await (await fetch('/status', { cache: 'no-store' })).json();
+      if (s.zugang === false) return beendet();
       box.className = s.live ? 'live' : '';
       st.textContent = s.live ? 'Live – die Führung läuft' : 'Gerade keine Sendung';
     } catch { st.textContent = 'Keine Verbindung'; box.className = ''; }
