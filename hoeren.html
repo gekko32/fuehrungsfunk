@@ -37,10 +37,14 @@
   const box = document.getElementById('status'), st = document.getElementById('st'), puf = document.getElementById('puf');
   let an = false, ws = null, sb = null, url = null, puffer = [], neuTimer = null, wachTimer = null;
 
-  // Bevorzugt: Ton per WebSocket in einen MediaSource-Puffer. Das umgeht Puffer im Tunnel,
-  // und wir können den Rückstand selbst klein halten. Sonst klassisch per <audio src>.
+  // Bevorzugt: Ton per WebSocket in einen MediaSource-Puffer; so halten wir den Rückstand selbst
+  // klein. 1. Wahl AAC in MP4 (Chrome, Firefox, Safari), 2. MP3 (Chrome), sonst <audio src>.
   const MS = window.ManagedMediaSource || window.MediaSource;
-  const mitMse = !!(MS && MS.isTypeSupported && MS.isTypeSupported('audio/mpeg'));
+  const kann = (t) => !!(MS && MS.isTypeSupported && MS.isTypeSupported(t));
+  const MP4 = 'audio/mp4; codecs="mp4a.40.2"';
+  const weg = kann(MP4) ? { typ: MP4, pfad: '/hoer-mp4', modus: 'segments' }
+    : kann('audio/mpeg') ? { typ: 'audio/mpeg', pfad: '/hoer-ws', modus: 'sequence' }
+    : null;
 
   function aufraeumen() {
     clearTimeout(neuTimer); clearInterval(wachTimer);
@@ -53,7 +57,7 @@
   function starten() {
     aufraeumen();
     an = true; play.textContent = '■ Stopp'; neu.hidden = false;
-    if (!mitMse) {
+    if (!weg) {
       // Rückfallweg (z. B. Firefox auf Android): normaler Audio-Strom. Der Browser puffert
       // selbst vor; wie beim MediaSource-Weg nach vorn springen, sobald mehr als 1,5 s anstehen.
       a.src = '/stream?t=' + Date.now(); a.play().catch(() => {});
@@ -70,10 +74,10 @@
     a.disableRemotePlayback = true;
     url = URL.createObjectURL(ms); a.src = url;
     ms.addEventListener('sourceopen', () => {
-      sb = ms.addSourceBuffer('audio/mpeg');
-      sb.mode = 'sequence';
+      sb = ms.addSourceBuffer(weg.typ);
+      sb.mode = weg.modus;
       sb.addEventListener('updateend', nachschieben);
-      ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/hoer-ws');
+      ws = new WebSocket(location.origin.replace(/^http/, 'ws') + weg.pfad);
       ws.binaryType = 'arraybuffer';
       ws.onmessage = (e) => { puffer.push(new Uint8Array(e.data)); nachschieben(); };
       ws.onclose = () => { if (an) neuTimer = setTimeout(starten, 2000); };

@@ -20,6 +20,8 @@ Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern er
 | `/` | Hörer (Gruppe) |
 | `/senden?k=SENDE_TOKEN` | Frank: Sende-Seite mit QR-Code |
 | `/status` | Live-Anzeige, Zuhörerzahl |
+| `/hoer-mp4` (WebSocket) | Hörer-Seite: AAC in MP4, schneller Weg für Chrome, Firefox, Safari |
+| `/hoer-ws`, `/stream` | Rückfall: MP3 per WebSocket bzw. normaler Audio-Strom |
 | `/guide` | Teilnehmer: Audioguide |
 | `/guide/verwalten?k=SENDE_TOKEN` | Frank: Stationen und Runden pflegen |
 | `/g/CODE` | QR-Code einer Runde |
