@@ -126,9 +126,10 @@ function zuhoeren(ws, req) {
 function verbinden(ws) {
   if (aktiv) aktiv.close(4000, 'verdraengt');
   aktiv = ws;
-  // Neuer Sender = neues Init-Segment: MP4-Hörer trennen, sie verbinden sich nach 2 s neu.
+  // Neuer Sender = neues Init-Segment. Wer schon auf den Start wartet, bekommt es mit dem ersten
+  // Fragment; nur Hörer mit der alten Sendung im Puffer trennen (Code 4001: sofort neu verbinden).
   initSeg = null;
-  for (const h of mp4Hoerer) h.ws.close(4001, 'neue Sendung');
+  for (const h of mp4Hoerer) if (h.init) h.ws.close(4001, 'neue Sendung');
   const ff = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'warning',
     '-fflags', 'nobuffer', '-i', 'pipe:0',

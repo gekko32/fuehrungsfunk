@@ -80,7 +80,8 @@
       ws = new WebSocket(location.origin.replace(/^http/, 'ws') + weg.pfad);
       ws.binaryType = 'arraybuffer';
       ws.onmessage = (e) => { puffer.push(new Uint8Array(e.data)); nachschieben(); };
-      ws.onclose = () => { if (an) neuTimer = setTimeout(starten, 2000); };
+      // 4001 = neue Sendung: sofort neu verbinden; sonst (Funkloch) nach 2 s.
+      ws.onclose = (e) => { if (an) neuTimer = setTimeout(starten, e.code === 4001 ? 100 : 2000); };
     }, { once: true });
     a.play().catch(() => {});
   }
