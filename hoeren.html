@@ -35,7 +35,7 @@
 <script>
   const a = document.getElementById('a'), play = document.getElementById('play'), neu = document.getElementById('neu');
   const box = document.getElementById('status'), st = document.getElementById('st'), puf = document.getElementById('puf');
-  let an = false, ws = null, sb = null, url = null, puffer = [], neuTimer = null;
+  let an = false, ws = null, sb = null, url = null, puffer = [], neuTimer = null, wachTimer = null;
 
   // Bevorzugt: Ton per WebSocket in einen MediaSource-Puffer. Das umgeht Puffer im Tunnel,
   // und wir können den Rückstand selbst klein halten. Sonst klassisch per <audio src>.
@@ -43,7 +43,7 @@
   const mitMse = !!(MS && MS.isTypeSupported && MS.isTypeSupported('audio/mpeg'));
 
   function aufraeumen() {
-    clearTimeout(neuTimer);
+    clearTimeout(neuTimer); clearInterval(wachTimer);
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     sb = null; puffer = [];
     a.pause(); a.removeAttribute('src'); a.load();
@@ -53,7 +53,19 @@
   function starten() {
     aufraeumen();
     an = true; play.textContent = '■ Stopp'; neu.hidden = false;
-    if (!mitMse) { a.src = '/stream?t=' + Date.now(); a.play().catch(() => {}); return; }
+    if (!mitMse) {
+      // Rückfallweg (z. B. Firefox auf Android): normaler Audio-Strom. Der Browser puffert
+      // selbst vor; wie beim MediaSource-Weg nach vorn springen, sobald mehr als 1,5 s anstehen.
+      a.src = '/stream?t=' + Date.now(); a.play().catch(() => {});
+      wachTimer = setInterval(() => {
+        const b = a.buffered;
+        if (!b.length) return;
+        const ende = b.end(b.length - 1);
+        if (ende - a.currentTime > 1.5) a.currentTime = ende - 0.5;
+        puf.textContent = 'Puffer im Gerät: ' + Math.max(0, ende - a.currentTime).toFixed(1) + ' s';
+      }, 1000);
+      return;
+    }
     const ms = new MS();
     a.disableRemotePlayback = true;
     url = URL.createObjectURL(ms); a.src = url;
