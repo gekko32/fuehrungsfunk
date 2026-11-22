@@ -68,9 +68,10 @@ ALS=adresse@example.org GEHEIMNIS=... node werkzeuge/guide-import.js http://loca
 
 ## Update einspielen
 
-1. Änderung committen und pushen (GitHub Desktop) → GitHub baut `ghcr.io/gekko32/fuehrungsfunk:latest`.
-2. Auf dem Server neu starten: `kubectl rollout restart deploy/fuehrungsfunk -n workspace`.
-3. Im Änderungsprotokoll (`technik/hetzner/AENDERUNGSPROTOKOLL.md`) vermerken.
+1. Änderung committen und pushen (GitHub Desktop) → GitHub testet (`npm test`) und baut `ghcr.io/gekko32/fuehrungsfunk:latest`. **Erst weiter, wenn der Bau grün ist.**
+2. Live geht das Image erst mit einem Render von mentolder-prod: Der Render schreibt den aktuellen `:latest`-Digest fest. Also Render auf `main` anstoßen (https://github.com/gekko32/mentolder-prod/actions/workflows/render.yml, „Run workflow“). Ein `rollout restart` allein holt **nicht** das neue Image.
+3. Braucht die neue Fassung andere Einstellungen in mentolder-prod, dann diesen PR **nach** dem grünen Bau mergen (er stößt den Render an), nie gleichzeitig: Sonst pinnt der Render das alte Image mit der neuen Konfiguration.
+4. Im Änderungsprotokoll (`technik/hetzner/AENDERUNGSPROTOKOLL.md`) vermerken.
 
 Die Kubernetes-Beschreibung steht in `gekko32/mentolder-prod`, Datei `prod-fleet/mentolder/fuehrungsfunk.yaml`.
 
