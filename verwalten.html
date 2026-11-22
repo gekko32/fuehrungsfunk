@@ -86,14 +86,16 @@
   </div>
 </main>
 <script>
-  const k = new URLSearchParams(location.search).get('k');
-  const H = { 'X-Schluessel': k };
-  const medien = (d) => '/guide/medien/' + d + '?k=' + encodeURIComponent(k);
+  const medien = (d) => '/guide/vorschau/medien/' + d;
   let guides = [], gid = null, st = [];
 
   async function api(methode, pfad, body, typ) {
-    const r = await fetch('/guide/api/' + pfad, { method: methode, headers: { ...H, ...(typ ? { 'Content-Type': typ } : {}) }, body });
-    const d = await r.json();
+    let r, d;
+    try {
+      // Die Stationsliste kommt über die Vorschau; /guide/api/stationen ist der Teilnehmerweg (nur mit Runde).
+      r = await fetch((pfad.startsWith('stationen') ? '/guide/vorschau/api/' : '/guide/api/') + pfad, { method: methode, headers: typ ? { 'Content-Type': typ } : {}, body, redirect: 'manual' });
+      d = await r.json();
+    } catch { throw new Error('Anmeldung abgelaufen? Bitte die Seite neu laden.'); }
     if (!r.ok) throw new Error(d.fehler || 'Fehler');
     return d;
   }
@@ -108,7 +110,7 @@
     $('guideWahl').innerHTML = guides.map((g) => '<option value="' + g.id + '"' + (g.id === gid ? ' selected' : '') + '>' + esc(g.titel) + ' (' + g.anzahl + ')</option>').join('');
     const g = guides.find((x) => x.id === gid);
     $('guideTitel').value = g.titel; $('guideText').value = g.beschreibung || '';
-    $('vorschau').href = '/guide?k=' + encodeURIComponent(k) + '&g=' + gid;
+    $('vorschau').href = '/guide/vorschau?g=' + gid;
     $('guideWeg').disabled = guides.length < 2;
     try { localStorage.setItem('guide', gid); } catch {}
     await laden(); rundenLaden();

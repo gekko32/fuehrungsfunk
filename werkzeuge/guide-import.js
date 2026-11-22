@@ -1,6 +1,12 @@
 // Legt einen Guide samt Stationen aus einem Inhaltsordner an (über die normale Schnittstelle).
 //
-//   SENDE_TOKEN=... node werkzeuge/guide-import.js https://funk.mentolder.de ORDNER
+// Spricht die App direkt an, nicht über den Anmelde-Vorschalter, und gibt sich als angemeldeter
+// Verwalter aus (Kopffeld X-Forwarded-Email). Das geht nur mit Cluster-Zugang:
+//
+//   kubectl -n workspace port-forward deploy/fuehrungsfunk 8090:8090
+//   ALS=adresse@example.org node werkzeuge/guide-import.js http://localhost:8090 ORDNER
+//
+// ALS muss in VERWALTUNG_EMAILS der App stehen.
 //
 // ORDNER/guide.json:
 //   { "titel": "...", "beschreibung": "...",
@@ -13,11 +19,11 @@ const fs = require('fs');
 const path = require('path');
 
 const [basis, ordner] = process.argv.slice(2);
-const token = process.env.SENDE_TOKEN;
-if (!basis || !ordner || !token) { console.error('Aufruf: SENDE_TOKEN=... node guide-import.js BASIS-URL ORDNER'); process.exit(1); }
+const als = process.env.ALS;
+if (!basis || !ordner || !als) { console.error('Aufruf: ALS=adresse node guide-import.js BASIS-URL ORDNER'); process.exit(1); }
 
 async function api(methode, pfad, body, typ) {
-  const r = await fetch(basis.replace(/\/$/, '') + '/guide/api/' + pfad, { method: methode, headers: { 'X-Schluessel': token, ...(typ ? { 'Content-Type': typ } : {}) }, body });
+  const r = await fetch(basis.replace(/\/$/, '') + '/guide/api/' + pfad, { method: methode, headers: { 'X-Forwarded-Email': als, ...(typ ? { 'Content-Type': typ } : {}) }, body });
   const d = await r.json();
   if (!r.ok) throw new Error(pfad + ': ' + (d.fehler || r.status));
   return d;
@@ -46,5 +52,5 @@ const text = (t) => '?text=' + encodeURIComponent(t || '');
     }
     console.log(`  ${i + 1}. ${s.titel}`);
   }
-  console.log('Fertig. Vorschau:', basis.replace(/\/$/, '') + '/guide?g=' + g.id + '&k=…');
+  console.log('Fertig. Vorschau (angemeldet): https://funk.mentolder.de/guide/vorschau?g=' + g.id);
 })().catch((e) => { console.error('Abbruch:', e.message); process.exit(1); });

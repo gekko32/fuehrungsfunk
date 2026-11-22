@@ -4,7 +4,8 @@
   "description": "Führungsfunk und Audioguide für Gruppenführungen (Grenzspaziergang)",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "ws": "^8.18.0"

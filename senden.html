@@ -41,7 +41,6 @@
   </div>
 </main>
 <script>
-  const k = new URLSearchParams(location.search).get('k');
   // Hörcode je Führung: Der QR-Code führt zu /h/CODE. Ein neuer Code beendet alte Hörer.
   const qr = document.getElementById('qr'), link = document.getElementById('link'), gueltig = document.getElementById('gueltig');
   function zeigeCode(rd) {
@@ -54,12 +53,12 @@
   }
   async function neuerCode() {
     const st = document.getElementById('stunden').value;
-    const rd = await (await fetch('/funk-runde?k=' + encodeURIComponent(k) + '&stunden=' + st, { method: 'POST' })).json();
+    const rd = await (await fetch('/funk-runde?stunden=' + st, { method: 'POST' })).json();
     zeigeCode(rd);
   }
   (async () => {
     // Gibt es noch keinen gültigen Code, gleich einen für 4 Stunden anlegen.
-    const rd = await (await fetch('/funk-runde?k=' + encodeURIComponent(k), { cache: 'no-store' })).json();
+    const rd = await (await fetch('/funk-runde', { cache: 'no-store' })).json();
     if (rd) zeigeCode(rd); else neuerCode();
   })();
   document.getElementById('neuerCode').onclick = neuerCode;
@@ -76,7 +75,7 @@
   }
 
   function verbinden() {
-    ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws?k=' + encodeURIComponent(k));
+    ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws');
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       const typ = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t));

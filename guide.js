@@ -7,18 +7,17 @@
 //                     ton: { sprecher, ki },              // MP3-Dateien; sprecher = Originalstimme
 //                     fotos: [{ datei, text }],           // Bildunterschrift je Foto
 //                     zeitreise: { art, frueher, heute } }] // art 'bild' (Schieberegler), später 'panorama'
-//   runden.json    [{ code, bis, guide }]
+//   runden.json    [{ code, bis, guide, art }]               // art 'qr'; später z. B. 'buchung'
+//
+// Wege: Teilnehmer nur mit Rundencode (Cookie) unter /g/…, /guide, /guide/api/stationen,
+// /guide/medien/…; dort wird die Anmeldung nie ausgewertet. Gerald (angemeldet über den
+// Vorschalter) pflegt unter /guide/verwalten und /guide/api/…, Vorschau unter /guide/vorschau.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 
-const DATEN = path.join(__dirname, 'daten');
-const MEDIEN = path.join(DATEN, 'medien');
-const GUIDES = path.join(DATEN, 'guides.json');
-const STATIONEN = path.join(DATEN, 'stationen.json');
-const RUNDEN = path.join(DATEN, 'runden.json');
-fs.mkdirSync(MEDIEN, { recursive: true });
+let DATEN, MEDIEN, GUIDES, STATIONEN, RUNDEN;
 
 const ID = /^[0-9a-f]{12}$/;
 const DATEI = /^[0-9a-f]{12}\.(mp3|jpg)$/;
@@ -48,10 +47,9 @@ function aufraeumen() {
     if (!s.zeitreise) s.zeitreise = leereZeitreise();
     if (typeof s.quelle !== 'string') s.quelle = '';
   }
-  for (const r of runden) if (!r.guide) r.guide = erster;
+  for (const r of runden) { if (!r.guide) r.guide = erster; if (!r.art) r.art = 'qr'; }
   schreib(GUIDES, guides); schreib(STATIONEN, st); schreib(RUNDEN, runden);
 }
-aufraeumen();
 
 const dateienVon = (s) => [s.ton.sprecher, s.ton.ki, ...s.fotos.map((f) => f.datei),
   s.zeitreise.frueher && s.zeitreise.frueher.datei, s.zeitreise.heute && s.zeitreise.heute.datei].filter(Boolean);
@@ -108,8 +106,11 @@ function medium(req, res, datei) {
   });
 }
 
-module.exports = function guide(SCHLUESSEL, seite) {
-  const istFrank = (req, url) => (req.headers['x-schluessel'] || url.searchParams.get('k')) === SCHLUESSEL;
+module.exports = function guide(istVerwaltung, seite, daten) {
+  DATEN = daten; MEDIEN = path.join(DATEN, 'medien');
+  GUIDES = path.join(DATEN, 'guides.json'); STATIONEN = path.join(DATEN, 'stationen.json'); RUNDEN = path.join(DATEN, 'runden.json');
+  fs.mkdirSync(MEDIEN, { recursive: true });
+  aufraeumen();
 
   function runde(req) {
     const m = /(?:^|;\s*)runde=([a-z0-9]+)/.exec(req.headers.cookie || '');
@@ -135,36 +136,44 @@ module.exports = function guide(SCHLUESSEL, seite) {
     }
     if (teile[0] !== 'guide') return false;
 
-    if (p === '/guide') { html(res, 'guide.html'); return true; }
-    if (p === '/guide/verwalten') {
-      if (!istFrank(req, url)) { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Kein Zugriff.'); return true; }
-      html(res, 'verwalten.html'); return true;
-    }
-
-    const frank = istFrank(req, url);
-    const r = frank ? null : runde(req);
     const guides = lies(GUIDES, []);
+    const stationenVon = (gid) => lies(STATIONEN, []).filter((s) => s.guide === gid);
+    const ausliefern = (gid, bis) => {
+      const g = guides.find((x) => x.id === gid);
+      if (!g) return json(res, 404, { fehler: 'Guide nicht gefunden' }), true;
+      return json(res, 200, { guide: g, bis, stationen: stationenVon(gid) }), true;
+    };
 
-    // Medien: Frank sieht alles, die Gruppe nur Dateien des freigeschalteten Guides.
-    if (teile[1] === 'medien' && DATEI.test(teile[2] || '') && teile.length === 3) {
-      const erlaubt = frank || (r && lies(STATIONEN, []).some((s) => s.guide === r.guide && dateienVon(s).includes(teile[2])));
-      if (!erlaubt) { res.writeHead(403); res.end(); return true; }
+    // ---------- Teilnehmer: nur mit gültiger Runde ----------
+    if (p === '/guide') { html(res, 'guide.html'); return true; }
+    if (p === '/guide/api/stationen' && req.method === 'GET') {
+      const r = runde(req);
+      if (!r) return json(res, 403, { fehler: 'gesperrt' }), true;
+      return ausliefern(r.guide, r.bis);
+    }
+    if (teile[1] === 'medien' && teile.length === 3) {
+      const r = runde(req);
+      const ok = r && DATEI.test(teile[2]) && stationenVon(r.guide).some((s) => dateienVon(s).includes(teile[2]));
+      if (!ok) { res.writeHead(403); res.end(); return true; }
       medium(req, res, teile[2]);
       return true;
     }
 
-    if (p === '/guide/api/stationen' && req.method === 'GET') {
-      if (!frank && !r) return json(res, 403, { fehler: 'gesperrt' }), true;
-      const gid = r ? r.guide : (url.searchParams.get('g') || (guides[0] || {}).id);
-      const g = guides.find((x) => x.id === gid);
-      if (!g) return json(res, 404, { fehler: 'Guide nicht gefunden' }), true;
-      json(res, 200, { guide: g, bis: r ? r.bis : null, stationen: lies(STATIONEN, []).filter((s) => s.guide === gid) });
+    // ---------- Ab hier nur Verwaltung (Anmeldung über den Vorschalter) ----------
+    if (!istVerwaltung(req)) {
+      if (teile[1] === 'api' || teile[1] === 'vorschau') return json(res, 403, { fehler: 'Kein Zugriff' }), true;
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Kein Zugriff.'); return true;
+    }
+    if (p === '/guide/verwalten') { html(res, 'verwalten.html'); return true; }
+    if (p === '/guide/vorschau') { html(res, 'guide.html'); return true; }
+    if (p === '/guide/vorschau/api/stationen' && req.method === 'GET') {
+      return ausliefern(url.searchParams.get('g') || (guides[0] || {}).id, null);
+    }
+    if (teile[1] === 'vorschau' && teile[2] === 'medien' && DATEI.test(teile[3] || '') && teile.length === 4) {
+      medium(req, res, teile[3]);
       return true;
     }
-
-    // Ab hier nur für Frank.
-    if (teile[1] !== 'api') return false;
-    if (!frank) return json(res, 403, { fehler: 'Kein Zugriff' }), true;
+    if (teile[1] !== 'api') { json(res, 404, { fehler: 'Nicht gefunden' }); return true; }
 
     try {
       const st = lies(STATIONEN, []);
@@ -289,7 +298,7 @@ module.exports = function guide(SCHLUESSEL, seite) {
         const stunden = Math.min(Math.max(Number(d.stunden) || 4, 1), 24 * 14);
         let code = '';
         for (const b of crypto.randomBytes(6)) code += ZEICHEN[b % ZEICHEN.length];
-        const neu = { code, bis: Date.now() + stunden * 3600 * 1000, guide: d.guide };
+        const neu = { code, bis: Date.now() + stunden * 3600 * 1000, guide: d.guide, art: 'qr' };
         schreib(RUNDEN, [...lies(RUNDEN, []).filter((x) => x.bis > Date.now()), neu]);
         return json(res, 200, neu), true;
       }

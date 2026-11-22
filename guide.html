@@ -43,11 +43,11 @@
 <body>
 <main id="m"><p class="klein">Lade …</p></main>
 <script>
-  const q = new URLSearchParams(location.search);
-  const k = q.get('k'); // Vorschau für Frank
-  const g = q.get('g');
-  const kopf = k ? { 'X-Schluessel': k } : {};
-  const medien = (d) => '/guide/medien/' + d + (k ? '?k=' + encodeURIComponent(k) : '');
+  // Unter /guide/vorschau sieht Gerald (angemeldet) einen beliebigen Guide; unter /guide die Gruppe ihren.
+  const vorschau = location.pathname.startsWith('/guide/vorschau');
+  const basis = vorschau ? '/guide/vorschau' : '/guide';
+  const g = new URLSearchParams(location.search).get('g');
+  const medien = (d) => basis + '/medien/' + d;
   const m = document.getElementById('m');
   let daten = null;
   let stimmeWahl = null; // vom Hörer gewählte Stimme, gilt für alle Stationen
@@ -55,8 +55,8 @@
   const esc = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   async function laden() {
-    const r = await fetch('/guide/api/stationen' + (g ? '?g=' + encodeURIComponent(g) : ''), { headers: kopf, cache: 'no-store' });
-    if (r.status === 403) {
+    const r = await fetch(basis + '/api/stationen' + (vorschau && g ? '?g=' + encodeURIComponent(g) : ''), { cache: 'no-store' });
+    if (!r.ok) {
       m.innerHTML = '<div class="gesperrt"><h1>Audioguide</h1><p class="klein">Bitte scanne den QR-Code, den dir dein Guide zeigt.</p></div>';
       return;
     }
