@@ -13,27 +13,58 @@ Gruppe <── /hoer-ws (WebSocket, springt bei Rückstand nach vorn) oder /stre
 
 Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern erreichbar).
 
+**Anmeldung (ab A72, Spezifikation `technik/hetzner/SPEZ-FUNK-AUDIOGUIDE.md`):** Vor der App sitzt ein Anmelde-Vorschalter (`oauth2-proxy-funk`, Pocket ID). Die Teilnehmerwege (unten „ohne Anmeldung“) lässt er durch, alles andere verlangt eine Anmeldung. Die App erlaubt die Verwaltung nur, wenn das Kopffeld `X-Forwarded-Email` in `VERWALTUNG_EMAILS` steht **und** die Anfrage das Geheimnis `VERWALTUNG_PROXY_GEHEIMNIS` als Basic-Passwort trägt (setzt nur der Vorschalter, `--basic-auth-password`). So kann ein anderer Pod im Namespace das Kopffeld nicht fälschen; eine Netzregel ginge hier nicht, weil die bestehenden Regeln allen Pods im Namespace den Zugang erlauben. Fehlt eine der beiden Einstellungen, ist die Verwaltung gesperrt. Teilnehmerwege werten das Kopffeld nie aus. Einen Schlüssel in der Adresse gibt es nicht mehr.
+
 ## Seiten
 
-| Adresse | Für wen |
-|---|---|
-| `/h/CODE` | QR-Code der Führung: setzt das Hör-Cookie bis zum Ablauf, dann weiter zu `/` |
-| `/` | Hörer (Gruppe) – nur mit gültigem Hörcode, sonst Hinweis „Führung beendet“ |
-| `/funk-runde?k=SENDE_TOKEN` | Sende-Seite: aktuellen Hörcode lesen (GET) bzw. neuen anlegen (POST, `stunden=`) |
-| `/senden?k=SENDE_TOKEN` | Frank: Sende-Seite mit QR-Code |
-| `/status` | Live-Anzeige, Zuhörerzahl |
-| `/hoer-mp4` (WebSocket) | Hörer-Seite: AAC in MP4, schneller Weg für Chrome, Firefox, Safari |
-| `/hoer-ws`, `/stream` | Rückfall: MP3 per WebSocket bzw. normaler Audio-Strom |
-| `/guide` | Teilnehmer: Audioguide |
-| `/guide/verwalten?k=SENDE_TOKEN` | Frank: Stationen und Runden pflegen |
-| `/g/CODE` | QR-Code einer Runde |
+| Adresse | Für wen | Anmeldung |
+|---|---|---|
+| `/h/CODE` | QR-Code der Führung: setzt das Hör-Cookie bis zum Ablauf, dann weiter zu `/` | ohne |
+| `/` | Hörer (Gruppe) – nur mit gültigem Hörcode, sonst Hinweis „Führung beendet“ | ohne |
+| `/status` | Live-Anzeige, Zuhörerzahl | ohne |
+| `/hoer-mp4` (WebSocket) | Hörer-Seite: AAC in MP4, schneller Weg für Chrome, Firefox, Safari | ohne |
+| `/hoer-ws`, `/stream` | Rückfall: MP3 per WebSocket bzw. normaler Audio-Strom | ohne |
+| `/g/CODE` | QR-Code einer Audioguide-Runde | ohne |
+| `/guide`, `/guide/api/stationen`, `/guide/medien/…` | Teilnehmer: der Guide, den ihre Runde freischaltet (nur mit Runden-Cookie) | ohne |
+| `/senden`, `/ws` (WebSocket) | Sende-Seite mit QR-Code und Sendeweg | Verwaltung |
+| `/funk-runde` | Hörcode lesen (GET) bzw. neuen anlegen (POST, `stunden=`) | Verwaltung |
+| `/guide/verwalten` | Guides, Stationen und Runden pflegen | Verwaltung |
+| `/guide/vorschau?g=GUIDE-ID` | Vorschau eines beliebigen Guides | Verwaltung |
+| `/guide/api/…` (außer `stationen`) | Schnittstelle der Verwaltung | Verwaltung |
+
+## Audioguide: mehrere Guides (seit 22.11.2026)
+
+Es kann beliebig viele Guides geben (z. B. Hauptführung, Ergänzungen, andere Sprache). Jede Runde gehört zu genau einem Guide; die Gruppe sieht nur diesen und kommt auch nur an dessen Bilder und Töne.
+
+Je Station:
+- **Text** (wird angezeigt und ist die Vorlage zum Vorlesen) und **Quelle**
+- **Zwei Tonspuren**: `sprecher` (Originalstimme, wird bevorzugt) und `ki` (KI-Stimme). Läuft die KI-Spur, steht für die Teilnehmer „Gelesen von einer KI-Stimme“ daneben. Gibt es beide, können sie umschalten.
+- **Bis zu 3 Fotos** mit Bildunterschrift
+- **Früher/Heute** (`zeitreise`): zwei Bilder vom gleichen Standpunkt, Teilnehmer schieben einen Regler. Feld `art` ist heute immer `bild`; `panorama` ist für spätere 360°-Ansichten reserviert und wird noch nicht angezeigt.
+
+Daten in `daten/`: `guides.json`, `stationen.json` (Feld `guide`), `runden.json` (Felder `guide` und `art`; heute immer `qr`, später z. B. `buchung` für eine Freischaltung per Buchungsnummer), Medien in `daten/medien/`. Ältere Daten (ein Guide, Feld `audio`) werden beim Start einmalig umgestellt: alles landet im Guide „Audioguide“, die alte Aufnahme wird zur Originalstimme.
+
+**Guide einspielen** (Inhalte liegen nicht in diesem öffentlichen Repo):
+
+```
+kubectl -n workspace port-forward deploy/fuehrungsfunk 8090:8090
+ALS=adresse@example.org GEHEIMNIS=... node werkzeuge/guide-import.js http://localhost:8090 ORDNER
+```
+
+`ORDNER/guide.json` beschreibt Titel, Stationen, Bilder (JPEG) und optional Tondateien; Aufbau im Kopf von `werkzeuge/guide-import.js`. Gibt es den Titel schon, bricht das Werkzeug ab.
 
 ## Einstellungen
 
 - Hörcode je Führung (seit 29.10.2026): Die Sende-Seite legt einen Code mit Ablaufzeit an (Standard 4 Stunden, wählbar 2 Std. bis 2 Tage). Ein neuer Code oder der Ablauf beendet alle Hörer mit altem Code. Gespeichert in `daten/funk-runde.json`.
-- `SENDE_TOKEN`: geheimer Teil der Sende- und Verwaltungslinks. Kommt aus dem Kubernetes-Secret `fuehrungsfunk` (Namespace `workspace`), liegt **nicht** in GitHub.
+- `VERWALTUNG_EMAILS`: kommagetrennte Liste der Adressen, die verwalten dürfen (heute nur Gerald). Leer = Verwaltung gesperrt.
+- `VERWALTUNG_PROXY_GEHEIMNIS`: gemeinsames Geheimnis von Vorschalter und App (Secret `fuehrungsfunk`). Leer = Verwaltung gesperrt.
+- `DATEN_DIR`: Datenordner (Standard `/app/daten`, für Tests ein eigener).
 - `ICECAST_SOURCE_PW`: wird bei jedem Start neu gewürfelt (`start.sh`), verlässt den Container nie.
 - Daten des Audioguides: `/app/daten/` (eigener Speicher, bleibt bei Neustarts erhalten).
+
+## Tests
+
+`npm test` startet die App mit eigenem Datenordner und prüft Rechte (ohne Anmeldung, fremde Adresse, Verwalter, ohne Einstellung), Sende-WebSocket, Trennung der Guides, Trennung Funk/Audioguide und die Übernahme alter Daten. Läuft auch beim Bau auf GitHub.
 
 ## Update einspielen
 

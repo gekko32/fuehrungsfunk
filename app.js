@@ -9,17 +9,37 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8090);
-const TOKEN = process.env.SENDE_TOKEN;            // geheimer Teil des Sende-Links
 const ICE_PW = process.env.ICECAST_SOURCE_PW;
 const ICE = 'http://127.0.0.1:8000';
-if (!TOKEN || !ICE_PW) { console.error('SENDE_TOKEN und ICECAST_SOURCE_PW fehlen'); process.exit(1); }
+if (!ICE_PW) { console.error('ICECAST_SOURCE_PW fehlt'); process.exit(1); }
+
+// Verwaltung (Senden, Hörcodes, Audioguide pflegen): Davor sitzt ein Anmelde-Vorschalter
+// (oauth2-proxy mit Pocket ID). Für angemeldete Anfragen schickt er die E-Mail als
+// X-Forwarded-Email und als Beleg, dass die Anfrage wirklich von ihm kommt, ein Geheimnis als
+// Passwort im Authorization-Kopffeld (--basic-auth-password). Andere Pods im Namespace erreichen
+// die App zwar, kennen das Geheimnis aber nicht. Erlaubt ist nur, wer in VERWALTUNG_EMAILS steht.
+// Fehlt eine der beiden Einstellungen, ist die Verwaltung gesperrt. Teilnehmerwege werten
+// beides nie aus.
+const VERWALTUNG = (process.env.VERWALTUNG_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const PROXY_GEHEIMNIS = Buffer.from(process.env.VERWALTUNG_PROXY_GEHEIMNIS || '');
+if (!VERWALTUNG.length || !PROXY_GEHEIMNIS.length) console.warn('VERWALTUNG_EMAILS oder VERWALTUNG_PROXY_GEHEIMNIS fehlt: Verwaltung ist gesperrt.');
+function vomVorschalter(req) {
+  const m = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(String(req.headers.authorization || ''));
+  if (!m || !PROXY_GEHEIMNIS.length) return false;
+  const klar = Buffer.from(m[1], 'base64').toString('utf8');
+  const pw = Buffer.from(klar.slice(klar.indexOf(':') + 1));
+  return pw.length === PROXY_GEHEIMNIS.length && crypto.timingSafeEqual(pw, PROXY_GEHEIMNIS);
+}
+const istVerwaltung = (req) => VERWALTUNG.length > 0 && vomVorschalter(req) &&
+  VERWALTUNG.includes(String(req.headers['x-forwarded-email'] || '').trim().toLowerCase());
 
 const seite = (name) => fs.readFileSync(path.join(__dirname, name));
 
 // Hörcode je Führung (wie die Runden des Audioguides): Der QR-Code enthält /h/CODE, das setzt
 // ein Cookie bis zum Ablauf. Hören geht nur mit dem aktuellen, gültigen Code; ein neuer Code
 // oder der Ablauf beendet alte Hörer. Gespeichert in daten/ (bleibt bei Neustarts erhalten).
-const FUNK = path.join(__dirname, 'daten', 'funk-runde.json');
+const DATEN = process.env.DATEN_DIR || path.join(__dirname, 'daten');
+const FUNK = path.join(DATEN, 'funk-runde.json');
 const ZEICHEN = 'abcdefghjkmnpqrstuvwxyz23456789';
 fs.mkdirSync(path.dirname(FUNK), { recursive: true });
 const funkRunde = () => { try { const r = JSON.parse(fs.readFileSync(FUNK, 'utf8')); return r.bis > Date.now() ? r : null; } catch { return null; } };
@@ -35,7 +55,7 @@ function alteBeenden() {
 }
 setInterval(alteBeenden, 30000);
 const ZU = '<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Führung hören</title><style>body{margin:0;background:#f6f4ef;color:#1f2421;font:18px/1.45 system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;text-align:center}@media (prefers-color-scheme:dark){body{background:#161917;color:#ecefea}}main{max-width:420px}</style></head><body><main><h1>Führung hören</h1><p>Diese Führung ist beendet oder der QR-Code ist nicht mehr gültig.</p><p>Bitte den QR-Code der aktuellen Führung scannen.</p></main></body></html>';
-const guide = require('./guide')(TOKEN, seite);
+const guide = require('./guide')(istVerwaltung, seite, DATEN);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -51,7 +71,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/') return hoerCode(req) ? sende(res, 200, 'text/html; charset=utf-8', seite('hoeren.html')) : sende(res, 200, 'text/html; charset=utf-8', ZU);
   if (url.pathname === '/funk-runde') {
-    if (url.searchParams.get('k') !== TOKEN) return sende(res, 403, 'text/plain; charset=utf-8', 'Kein Zugriff.');
+    if (!istVerwaltung(req)) return sende(res, 403, 'text/plain; charset=utf-8', 'Kein Zugriff.');
     if (req.method === 'POST') {
       const stunden = Math.min(72, Math.max(1, Number(url.searchParams.get('stunden')) || 4));
       let code = ''; for (const b of crypto.randomBytes(6)) code += ZEICHEN[b % ZEICHEN.length];
@@ -63,7 +83,7 @@ const server = http.createServer(async (req, res) => {
     return sende(res, 200, 'application/json', JSON.stringify(funkRunde()));
   }
   if (url.pathname === '/senden') {
-    if (url.searchParams.get('k') !== TOKEN) return sende(res, 403, 'text/plain; charset=utf-8', 'Kein Zugriff.');
+    if (!istVerwaltung(req)) return sende(res, 403, 'text/plain; charset=utf-8', 'Kein Zugriff.');
     return sende(res, 200, 'text/html; charset=utf-8', seite('senden.html'));
   }
   if (url.pathname === '/stream') { const c = hoerCode(req); return c ? streamWeiterleiten(req, res, c) : sende(res, 403, 'text/plain; charset=utf-8', 'Kein gültiger Hörcode.'); }
@@ -155,7 +175,7 @@ server.on('upgrade', (req, sock, head) => {
     const ziel = url.pathname === '/hoer-mp4' ? zuhoerenMp4 : zuhoeren;
     return wss.handleUpgrade(req, sock, head, (ws) => ziel(ws, req, code));
   }
-  if (url.pathname !== '/ws' || url.searchParams.get('k') !== TOKEN) return sock.destroy();
+  if (url.pathname !== '/ws' || !istVerwaltung(req)) return sock.destroy();
   wss.handleUpgrade(req, sock, head, (ws) => verbinden(ws));
 });
 
@@ -195,6 +215,8 @@ function verbinden(ws) {
   ff.stdout.on('data', mp4Verteiler());
   ff.stderr.on('data', (d) => console.error('ffmpeg:', d.toString().trim()));
   ff.stdin.on('error', () => {});
+  // ffmpeg fehlt oder startet nicht: Sendung beenden statt die ganze App abstürzen zu lassen.
+  ff.on('error', (e) => { console.error('ffmpeg startet nicht:', e.message); ws.close(); });
   ff.on('exit', (c) => { console.log('ffmpeg beendet', c); ws.close(); });
   // Messprotokoll: kommen die Daten vom Handy gleichmäßig an?
   let bytes = 0, letzte = Date.now(), groessteLuecke = 0;

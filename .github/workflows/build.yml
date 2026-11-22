@@ -36,6 +36,11 @@ jobs:
           node --check app.js
           node --check guide.js
 
+      - name: Rechte und Trennung testen
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+
       - name: Kurz-SHA
         id: version
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
