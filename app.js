@@ -14,12 +14,24 @@ const ICE = 'http://127.0.0.1:8000';
 if (!ICE_PW) { console.error('ICECAST_SOURCE_PW fehlt'); process.exit(1); }
 
 // Verwaltung (Senden, Hörcodes, Audioguide pflegen): Davor sitzt ein Anmelde-Vorschalter
-// (oauth2-proxy mit Pocket ID), der die E-Mail des Angemeldeten als X-Forwarded-Email
-// mitschickt. Erlaubt ist nur, wer in VERWALTUNG_EMAILS steht. Ohne diese Einstellung ist
-// die Verwaltung gesperrt. Teilnehmerwege werten das Kopffeld nie aus.
+// (oauth2-proxy mit Pocket ID). Für angemeldete Anfragen schickt er die E-Mail als
+// X-Forwarded-Email und als Beleg, dass die Anfrage wirklich von ihm kommt, ein Geheimnis als
+// Passwort im Authorization-Kopffeld (--basic-auth-password). Andere Pods im Namespace erreichen
+// die App zwar, kennen das Geheimnis aber nicht. Erlaubt ist nur, wer in VERWALTUNG_EMAILS steht.
+// Fehlt eine der beiden Einstellungen, ist die Verwaltung gesperrt. Teilnehmerwege werten
+// beides nie aus.
 const VERWALTUNG = (process.env.VERWALTUNG_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-if (!VERWALTUNG.length) console.warn('VERWALTUNG_EMAILS fehlt: Verwaltung ist gesperrt.');
-const istVerwaltung = (req) => VERWALTUNG.includes(String(req.headers['x-forwarded-email'] || '').trim().toLowerCase());
+const PROXY_GEHEIMNIS = Buffer.from(process.env.VERWALTUNG_PROXY_GEHEIMNIS || '');
+if (!VERWALTUNG.length || !PROXY_GEHEIMNIS.length) console.warn('VERWALTUNG_EMAILS oder VERWALTUNG_PROXY_GEHEIMNIS fehlt: Verwaltung ist gesperrt.');
+function vomVorschalter(req) {
+  const m = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(String(req.headers.authorization || ''));
+  if (!m || !PROXY_GEHEIMNIS.length) return false;
+  const klar = Buffer.from(m[1], 'base64').toString('utf8');
+  const pw = Buffer.from(klar.slice(klar.indexOf(':') + 1));
+  return pw.length === PROXY_GEHEIMNIS.length && crypto.timingSafeEqual(pw, PROXY_GEHEIMNIS);
+}
+const istVerwaltung = (req) => VERWALTUNG.length > 0 && vomVorschalter(req) &&
+  VERWALTUNG.includes(String(req.headers['x-forwarded-email'] || '').trim().toLowerCase());
 
 const seite = (name) => fs.readFileSync(path.join(__dirname, name));
 
@@ -203,6 +215,8 @@ function verbinden(ws) {
   ff.stdout.on('data', mp4Verteiler());
   ff.stderr.on('data', (d) => console.error('ffmpeg:', d.toString().trim()));
   ff.stdin.on('error', () => {});
+  // ffmpeg fehlt oder startet nicht: Sendung beenden statt die ganze App abstürzen zu lassen.
+  ff.on('error', (e) => { console.error('ffmpeg startet nicht:', e.message); ws.close(); });
   ff.on('exit', (c) => { console.log('ffmpeg beendet', c); ws.close(); });
   // Messprotokoll: kommen die Daten vom Handy gleichmäßig an?
   let bytes = 0, letzte = Date.now(), groessteLuecke = 0;

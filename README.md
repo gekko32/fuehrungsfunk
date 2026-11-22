@@ -13,7 +13,7 @@ Gruppe <── /hoer-ws (WebSocket, springt bei Rückstand nach vorn) oder /stre
 
 Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern erreichbar).
 
-**Anmeldung (ab A72, Spezifikation `technik/hetzner/SPEZ-FUNK-AUDIOGUIDE.md`):** Vor der App sitzt ein Anmelde-Vorschalter (`oauth2-proxy-funk`, Pocket ID). Die Teilnehmerwege (unten „ohne Anmeldung“) lässt er durch, alles andere verlangt eine Anmeldung. Die App erlaubt die Verwaltung nur, wenn das Kopffeld `X-Forwarded-Email` in `VERWALTUNG_EMAILS` steht; ohne diese Einstellung ist die Verwaltung gesperrt. Teilnehmerwege werten das Kopffeld nie aus. Einen Schlüssel in der Adresse gibt es nicht mehr.
+**Anmeldung (ab A72, Spezifikation `technik/hetzner/SPEZ-FUNK-AUDIOGUIDE.md`):** Vor der App sitzt ein Anmelde-Vorschalter (`oauth2-proxy-funk`, Pocket ID). Die Teilnehmerwege (unten „ohne Anmeldung“) lässt er durch, alles andere verlangt eine Anmeldung. Die App erlaubt die Verwaltung nur, wenn das Kopffeld `X-Forwarded-Email` in `VERWALTUNG_EMAILS` steht **und** die Anfrage das Geheimnis `VERWALTUNG_PROXY_GEHEIMNIS` als Basic-Passwort trägt (setzt nur der Vorschalter, `--basic-auth-password`). So kann ein anderer Pod im Namespace das Kopffeld nicht fälschen; eine Netzregel ginge hier nicht, weil die bestehenden Regeln allen Pods im Namespace den Zugang erlauben. Fehlt eine der beiden Einstellungen, ist die Verwaltung gesperrt. Teilnehmerwege werten das Kopffeld nie aus. Einen Schlüssel in der Adresse gibt es nicht mehr.
 
 ## Seiten
 
@@ -48,7 +48,7 @@ Daten in `daten/`: `guides.json`, `stationen.json` (Feld `guide`), `runden.json`
 
 ```
 kubectl -n workspace port-forward deploy/fuehrungsfunk 8090:8090
-ALS=adresse@example.org node werkzeuge/guide-import.js http://localhost:8090 ORDNER
+ALS=adresse@example.org GEHEIMNIS=... node werkzeuge/guide-import.js http://localhost:8090 ORDNER
 ```
 
 `ORDNER/guide.json` beschreibt Titel, Stationen, Bilder (JPEG) und optional Tondateien; Aufbau im Kopf von `werkzeuge/guide-import.js`. Gibt es den Titel schon, bricht das Werkzeug ab.
@@ -57,6 +57,7 @@ ALS=adresse@example.org node werkzeuge/guide-import.js http://localhost:8090 ORD
 
 - Hörcode je Führung (seit 29.10.2026): Die Sende-Seite legt einen Code mit Ablaufzeit an (Standard 4 Stunden, wählbar 2 Std. bis 2 Tage). Ein neuer Code oder der Ablauf beendet alle Hörer mit altem Code. Gespeichert in `daten/funk-runde.json`.
 - `VERWALTUNG_EMAILS`: kommagetrennte Liste der Adressen, die verwalten dürfen (heute nur Gerald). Leer = Verwaltung gesperrt.
+- `VERWALTUNG_PROXY_GEHEIMNIS`: gemeinsames Geheimnis von Vorschalter und App (Secret `fuehrungsfunk`). Leer = Verwaltung gesperrt.
 - `DATEN_DIR`: Datenordner (Standard `/app/daten`, für Tests ein eigener).
 - `ICECAST_SOURCE_PW`: wird bei jedem Start neu gewürfelt (`start.sh`), verlässt den Container nie.
 - Daten des Audioguides: `/app/daten/` (eigener Speicher, bleibt bei Neustarts erhalten).

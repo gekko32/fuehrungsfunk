@@ -9,6 +9,9 @@ const { spawn } = require('child_process');
 const WebSocket = require('ws');
 
 const CHEF = 'chef@example.org';
+const GEHEIM = 'vorschalter-geheimnis-123';
+const basic = (pw) => 'Basic ' + Buffer.from('nutzer:' + pw).toString('base64');
+const VORSCHALTER = { Authorization: basic(GEHEIM) };
 let port = 18190;
 
 async function starte(env, vorher) {
@@ -16,7 +19,7 @@ async function starte(env, vorher) {
   if (vorher) vorher(daten);
   const p = port++;
   const kind = spawn(process.execPath, [path.join(__dirname, '..', 'app.js')], {
-    env: { ...process.env, PORT: String(p), ICECAST_SOURCE_PW: 'x', DATEN_DIR: daten, ...env },
+    env: { ...process.env, PORT: String(p), ICECAST_SOURCE_PW: 'x', DATEN_DIR: daten, VERWALTUNG_PROXY_GEHEIMNIS: GEHEIM, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await new Promise((ok, fehler) => {
@@ -25,7 +28,7 @@ async function starte(env, vorher) {
   });
   const basis = `http://127.0.0.1:${p}`;
   const hol = (pfad, opt = {}) => fetch(basis + pfad, { redirect: 'manual', ...opt });
-  const alsChef = (pfad, opt = {}) => hol(pfad, { ...opt, headers: { 'X-Forwarded-Email': CHEF, ...(opt.headers || {}) } });
+  const alsChef = (pfad, opt = {}) => hol(pfad, { ...opt, headers: { 'X-Forwarded-Email': CHEF, ...VORSCHALTER, ...(opt.headers || {}) } });
   return { basis, daten, hol, alsChef, ende: () => kind.kill() };
 }
 
@@ -37,12 +40,14 @@ test('Verwaltung: ohne Anmeldung, mit fremder Adresse und mit Verwalter', async 
   try {
     for (const w of VERWALTUNGSWEGE) {
       assert.strictEqual((await a.hol(w)).status, 403, 'ohne Anmeldung ' + w);
-      assert.strictEqual((await a.hol(w, { headers: { 'X-Forwarded-Email': 'fremd@example.org' } })).status, 403, 'fremd ' + w);
+      assert.strictEqual((await a.hol(w, { headers: { 'X-Forwarded-Email': 'fremd@example.org', ...VORSCHALTER } })).status, 403, 'fremd ' + w);
+      assert.strictEqual((await a.hol(w, { headers: { 'X-Forwarded-Email': CHEF } })).status, 403, 'Kopffeld ohne Vorschalter-Geheimnis ' + w);
+      assert.strictEqual((await a.hol(w, { headers: { 'X-Forwarded-Email': CHEF, Authorization: basic('falsch') } })).status, 403, 'falsches Geheimnis ' + w);
       assert.strictEqual((await a.alsChef(w)).status, 200, 'Verwalter ' + w);
     }
     // Groß-/Kleinschreibung egal, zweiter Eintrag der Liste gilt auch
-    assert.strictEqual((await a.hol('/senden', { headers: { 'X-Forwarded-Email': 'CHEF@Example.org' } })).status, 200);
-    assert.strictEqual((await a.hol('/senden', { headers: { 'X-Forwarded-Email': 'zweite@example.org' } })).status, 200);
+    assert.strictEqual((await a.hol('/senden', { headers: { 'X-Forwarded-Email': 'CHEF@Example.org', ...VORSCHALTER } })).status, 200);
+    assert.strictEqual((await a.hol('/senden', { headers: { 'X-Forwarded-Email': 'zweite@example.org', ...VORSCHALTER } })).status, 200);
     // Alter Weg mit Schlüssel in der Adresse öffnet nichts mehr (K8)
     assert.strictEqual((await a.hol('/senden?k=irgendwas')).status, 403);
     assert.strictEqual((await a.hol('/guide/verwalten?k=irgendwas')).status, 403);
@@ -52,18 +57,20 @@ test('Verwaltung: ohne Anmeldung, mit fremder Adresse und mit Verwalter', async 
   } finally { a.ende(); }
 });
 
-test('Ohne VERWALTUNG_EMAILS ist die Verwaltung gesperrt', async () => {
-  const a = await starte({ VERWALTUNG_EMAILS: '' });
-  try {
-    for (const w of VERWALTUNGSWEGE) assert.strictEqual((await a.alsChef(w)).status, 403, w);
-  } finally { a.ende(); }
+test('Ohne VERWALTUNG_EMAILS oder ohne Vorschalter-Geheimnis ist die Verwaltung gesperrt', async () => {
+  for (const env of [{ VERWALTUNG_EMAILS: '' }, { VERWALTUNG_EMAILS: CHEF, VERWALTUNG_PROXY_GEHEIMNIS: '' }]) {
+    const a = await starte(env);
+    try {
+      for (const w of VERWALTUNGSWEGE) assert.strictEqual((await a.alsChef(w)).status, 403, JSON.stringify(env) + ' ' + w);
+    } finally { a.ende(); }
+  }
 });
 
 test('Sende-WebSocket nur für den Verwalter', async () => {
   const a = await starte({ VERWALTUNG_EMAILS: CHEF });
   try {
     const url = a.basis.replace('http', 'ws') + '/ws';
-    for (const kopf of [{}, { 'X-Forwarded-Email': 'fremd@example.org' }]) {
+    for (const kopf of [{}, { 'X-Forwarded-Email': 'fremd@example.org', ...VORSCHALTER }, { 'X-Forwarded-Email': CHEF }]) {
       const ergebnis = await new Promise((ok) => {
         const ws = new WebSocket(url, { headers: kopf });
         ws.on('open', () => { ws.close(); ok('offen'); });
@@ -71,6 +78,13 @@ test('Sende-WebSocket nur für den Verwalter', async () => {
       });
       assert.strictEqual(ergebnis, 'abgelehnt', JSON.stringify(kopf));
     }
+    // Positiv-Gegenstück: mit Kopffeld und Geheimnis geht die Verbindung auf
+    const offen = await new Promise((ok) => {
+      const ws = new WebSocket(url, { headers: { 'X-Forwarded-Email': CHEF, ...VORSCHALTER } });
+      ws.on('open', () => { ws.close(); ok('offen'); });
+      ws.on('error', () => ok('abgelehnt'));
+    });
+    assert.strictEqual(offen, 'offen');
   } finally { a.ende(); }
 });
 

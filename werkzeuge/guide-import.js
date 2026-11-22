@@ -4,9 +4,10 @@
 // Verwalter aus (Kopffeld X-Forwarded-Email). Das geht nur mit Cluster-Zugang:
 //
 //   kubectl -n workspace port-forward deploy/fuehrungsfunk 8090:8090
-//   ALS=adresse@example.org node werkzeuge/guide-import.js http://localhost:8090 ORDNER
+//   ALS=adresse@example.org GEHEIMNIS=... node werkzeuge/guide-import.js http://localhost:8090 ORDNER
 //
-// ALS muss in VERWALTUNG_EMAILS der App stehen.
+// ALS muss in VERWALTUNG_EMAILS der App stehen, GEHEIMNIS ist VERWALTUNG_PROXY_GEHEIMNIS
+// (im Cluster: Secret fuehrungsfunk). Es wird nie ausgegeben.
 //
 // ORDNER/guide.json:
 //   { "titel": "...", "beschreibung": "...",
@@ -20,10 +21,12 @@ const path = require('path');
 
 const [basis, ordner] = process.argv.slice(2);
 const als = process.env.ALS;
-if (!basis || !ordner || !als) { console.error('Aufruf: ALS=adresse node guide-import.js BASIS-URL ORDNER'); process.exit(1); }
+const geheimnis = process.env.GEHEIMNIS;
+if (!basis || !ordner || !als || !geheimnis) { console.error('Aufruf: ALS=adresse GEHEIMNIS=... node guide-import.js BASIS-URL ORDNER'); process.exit(1); }
+const vorschalter = 'Basic ' + Buffer.from('import:' + geheimnis).toString('base64');
 
 async function api(methode, pfad, body, typ) {
-  const r = await fetch(basis.replace(/\/$/, '') + '/guide/api/' + pfad, { method: methode, headers: { 'X-Forwarded-Email': als, ...(typ ? { 'Content-Type': typ } : {}) }, body });
+  const r = await fetch(basis.replace(/\/$/, '') + '/guide/api/' + pfad, { method: methode, headers: { 'X-Forwarded-Email': als, Authorization: vorschalter, ...(typ ? { 'Content-Type': typ } : {}) }, body });
   const d = await r.json();
   if (!r.ok) throw new Error(pfad + ': ' + (d.fehler || r.status));
   return d;
