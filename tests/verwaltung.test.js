@@ -33,7 +33,7 @@ async function starte(env, vorher) {
 }
 
 const VERWALTUNGSWEGE = ['/senden', '/funk-runde', '/guide/verwalten', '/guide/vorschau', '/guide/vorschau/api/stationen', '/guide/api/guides', '/guide/api/runden'];
-const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const JPEG = fs.readFileSync(path.join(__dirname, 'testbild.jpg')); // echtes kleines JPEG (16×16)
 
 test('Verwaltung: ohne Anmeldung, mit fremder Adresse und mit Verwalter', async () => {
   const a = await starte({ VERWALTUNG_EMAILS: ` ${CHEF} ,zweite@example.org` });

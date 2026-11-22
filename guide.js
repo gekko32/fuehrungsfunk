@@ -80,9 +80,43 @@ function zuMp3(quelle, ziel) {
   ], (err) => (err ? fehler(err) : ok())));
 }
 
+// Standortdaten dürfen nie gespeichert werden (Gerald, 22.11.2026). Deshalb entfernt der Server bei
+// JEDEM Bild alle Metadaten-Blöcke, egal woher es kommt (Browser, Import-Werkzeug, Schnittstelle).
+// Behalten wird nur, was zum Anzeigen nötig ist; die Bilddaten selbst bleiben unverändert.
+//   behalten: Tabellen/Bildaufbau (DQT, SOF, DHT, DRI ...), APP0 nur JFIF, APP2 nur ICC-Farbprofil, APP14 Adobe
+//   entfernt: APP1 (EXIF mit GPS, XMP), APP3–APP13 (u. a. IPTC), APP15, Kommentare (COM),
+//             JFIF-Erweiterungen (Vorschaubild) und alles hinter dem Bildende (z. B. Bewegtbild-Anhänge).
+function ohneMetadaten(b) {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) throw new Error('Kein JPEG');
+  const teile = [b.subarray(0, 2)];
+  let i = 2;
+  for (;;) {
+    if (i + 4 > b.length || b[i] !== 0xff) throw new Error('JPEG beschädigt');
+    const m = b[i + 1];
+    if (m === 0xff) { i++; continue; } // Füllbytes
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; } // ohne Länge
+    const len = b.readUInt16BE(i + 2);
+    if (len < 2 || i + 2 + len > b.length) throw new Error('JPEG beschädigt');
+    const seg = b.subarray(i, i + 2 + len);
+    const kennung = b.subarray(i + 4, i + 2 + len).toString('latin1');
+    if (m === 0xda) { // Start der Bilddaten: bis zum ersten Bildende übernehmen, Rest verwerfen
+      let e = i + 2 + len;
+      while (e + 1 < b.length && !(b[e] === 0xff && b[e + 1] === 0xd9)) e++;
+      if (e + 1 >= b.length) throw new Error('JPEG beschädigt');
+      teile.push(b.subarray(i, e + 2));
+      return Buffer.concat(teile);
+    }
+    const behalten = (m < 0xe0 || m > 0xef) && m !== 0xfe // kein APPn, kein COM
+      || (m === 0xe0 && kennung.startsWith('JFIF\0'))
+      || (m === 0xe2 && kennung.startsWith('ICC_PROFILE\0'))
+      || (m === 0xee && kennung.startsWith('Adobe'));
+    if (behalten) teile.push(seg);
+    i += 2 + len;
+  }
+}
+
 async function jpegSpeichern(req) {
-  const daten = await koerper(req, 15 * 1024 * 1024);
-  if (daten[0] !== 0xff || daten[1] !== 0xd8) throw new Error('Kein JPEG');
+  const daten = ohneMetadaten(await koerper(req, 15 * 1024 * 1024));
   const datei = neueId() + '.jpg';
   fs.writeFileSync(path.join(MEDIEN, datei), daten);
   return datei;
@@ -314,3 +348,6 @@ module.exports = function guide(istVerwaltung, seite, daten) {
     return true;
   };
 };
+
+// Für Tests: Metadaten-Bereinigung direkt prüfbar.
+module.exports.ohneMetadaten = ohneMetadaten;
