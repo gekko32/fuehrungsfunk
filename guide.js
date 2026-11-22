@@ -1,5 +1,13 @@
-// Audioguide – vorgesprochene Stationen (Ton, Text, bis zu 2 Fotos).
-// Frank pflegt die Stationen und schaltet pro Führung eine Runde per QR-Code frei.
+// Audioguide – mehrere Guides mit vorgesprochenen Stationen (Ton, Text, Fotos, Früher/Heute).
+// Frank pflegt die Guides und schaltet pro Führung eine Runde für genau einen Guide per QR-Code frei.
+//
+// Datenmodell (daten/):
+//   guides.json    [{ id, titel, beschreibung }]
+//   stationen.json [{ id, guide, titel, text, quelle,
+//                     ton: { sprecher, ki },              // MP3-Dateien; sprecher = Originalstimme
+//                     fotos: [{ datei, text }],           // Bildunterschrift je Foto
+//                     zeitreise: { art, frueher, heute } }] // art 'bild' (Schieberegler), später 'panorama'
+//   runden.json    [{ code, bis, guide }]
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -7,6 +15,7 @@ const { execFile } = require('child_process');
 
 const DATEN = path.join(__dirname, 'daten');
 const MEDIEN = path.join(DATEN, 'medien');
+const GUIDES = path.join(DATEN, 'guides.json');
 const STATIONEN = path.join(DATEN, 'stationen.json');
 const RUNDEN = path.join(DATEN, 'runden.json');
 fs.mkdirSync(MEDIEN, { recursive: true });
@@ -14,12 +23,38 @@ fs.mkdirSync(MEDIEN, { recursive: true });
 const ID = /^[0-9a-f]{12}$/;
 const DATEI = /^[0-9a-f]{12}\.(mp3|jpg)$/;
 const ZEICHEN = 'abcdefghjkmnpqrstuvwxyz23456789'; // ohne verwechselbare Zeichen
-const MAX_FOTOS = 2;
+const MAX_FOTOS = 3;
+const STIMMEN = ['sprecher', 'ki'];
+const SEITEN = ['frueher', 'heute'];
 
 const lies = (f, leer) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return leer; } };
 const schreib = (f, d) => { fs.writeFileSync(f + '.tmp', JSON.stringify(d, null, 1)); fs.renameSync(f + '.tmp', f); };
 const neueId = () => crypto.randomBytes(6).toString('hex');
 const loesche = (datei) => { if (datei) fs.rm(path.join(MEDIEN, datei), { force: true }, () => {}); };
+const leereZeitreise = () => ({ art: 'bild', frueher: null, heute: null });
+
+// Ältere Daten (ein Guide, Feld audio, Fotos als Dateinamen) einmalig ins neue Modell überführen.
+function aufraeumen() {
+  let guides = lies(GUIDES, null);
+  const st = lies(STATIONEN, []);
+  const runden = lies(RUNDEN, []);
+  if (!Array.isArray(guides) || !guides.length) guides = [{ id: neueId(), titel: 'Audioguide', beschreibung: '' }];
+  const erster = guides[0].id;
+  for (const s of st) {
+    if (!s.guide || !guides.some((g) => g.id === s.guide)) s.guide = erster;
+    if (!s.ton) s.ton = { sprecher: s.audio || null, ki: null };
+    delete s.audio;
+    s.fotos = (s.fotos || []).map((f) => (typeof f === 'string' ? { datei: f, text: '' } : f));
+    if (!s.zeitreise) s.zeitreise = leereZeitreise();
+    if (typeof s.quelle !== 'string') s.quelle = '';
+  }
+  for (const r of runden) if (!r.guide) r.guide = erster;
+  schreib(GUIDES, guides); schreib(STATIONEN, st); schreib(RUNDEN, runden);
+}
+aufraeumen();
+
+const dateienVon = (s) => [s.ton.sprecher, s.ton.ki, ...s.fotos.map((f) => f.datei),
+  s.zeitreise.frueher && s.zeitreise.frueher.datei, s.zeitreise.heute && s.zeitreise.heute.datei].filter(Boolean);
 
 function json(res, code, daten) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -37,6 +72,7 @@ function koerper(req, max) {
     req.on('error', fehler);
   });
 }
+const jsonKoerper = async (req) => JSON.parse((await koerper(req, 200000)).toString('utf8') || '{}');
 
 // Jede Aufnahme wird zu MP3 mit gleichmäßiger Lautstärke; das spielt jedes Handy ab.
 function zuMp3(quelle, ziel) {
@@ -44,6 +80,14 @@ function zuMp3(quelle, ziel) {
     '-y', '-loglevel', 'error', '-i', quelle, '-vn', '-ac', '1', '-ar', '44100',
     '-af', 'loudnorm=I=-16:TP=-1.5', '-c:a', 'libmp3lame', '-b:a', '96k', ziel,
   ], (err) => (err ? fehler(err) : ok())));
+}
+
+async function jpegSpeichern(req) {
+  const daten = await koerper(req, 15 * 1024 * 1024);
+  if (daten[0] !== 0xff || daten[1] !== 0xd8) throw new Error('Kein JPEG');
+  const datei = neueId() + '.jpg';
+  fs.writeFileSync(path.join(MEDIEN, datei), daten);
+  return datei;
 }
 
 // Ton- und Bilddateien mit Range-Unterstützung ausliefern (Safari braucht das für Audio).
@@ -71,6 +115,7 @@ module.exports = function guide(SCHLUESSEL, seite) {
     const m = /(?:^|;\s*)runde=([a-z0-9]+)/.exec(req.headers.cookie || '');
     return m ? lies(RUNDEN, []).find((r) => r.code === m[1] && r.bis > Date.now()) : null;
   }
+  const html = (res, name) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(seite(name)); };
 
   return async function (req, res, url) {
     const p = url.pathname;
@@ -90,24 +135,30 @@ module.exports = function guide(SCHLUESSEL, seite) {
     }
     if (teile[0] !== 'guide') return false;
 
-    if (p === '/guide') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(seite('guide.html')); return true; }
+    if (p === '/guide') { html(res, 'guide.html'); return true; }
     if (p === '/guide/verwalten') {
       if (!istFrank(req, url)) { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Kein Zugriff.'); return true; }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(seite('verwalten.html')); return true;
+      html(res, 'verwalten.html'); return true;
     }
 
     const frank = istFrank(req, url);
     const r = frank ? null : runde(req);
+    const guides = lies(GUIDES, []);
 
+    // Medien: Frank sieht alles, die Gruppe nur Dateien des freigeschalteten Guides.
     if (teile[1] === 'medien' && DATEI.test(teile[2] || '') && teile.length === 3) {
-      if (!frank && !r) { res.writeHead(403); res.end(); return true; }
+      const erlaubt = frank || (r && lies(STATIONEN, []).some((s) => s.guide === r.guide && dateienVon(s).includes(teile[2])));
+      if (!erlaubt) { res.writeHead(403); res.end(); return true; }
       medium(req, res, teile[2]);
       return true;
     }
 
     if (p === '/guide/api/stationen' && req.method === 'GET') {
       if (!frank && !r) return json(res, 403, { fehler: 'gesperrt' }), true;
-      json(res, 200, { bis: r ? r.bis : null, stationen: lies(STATIONEN, []) });
+      const gid = r ? r.guide : (url.searchParams.get('g') || (guides[0] || {}).id);
+      const g = guides.find((x) => x.id === gid);
+      if (!g) return json(res, 404, { fehler: 'Guide nicht gefunden' }), true;
+      json(res, 200, { guide: g, bis: r ? r.bis : null, stationen: lies(STATIONEN, []).filter((s) => s.guide === gid) });
       return true;
     }
 
@@ -118,69 +169,127 @@ module.exports = function guide(SCHLUESSEL, seite) {
     try {
       const st = lies(STATIONEN, []);
       const id = teile[3];
-      const s = ID.test(id || '') ? st.find((x) => x.id === id) : null;
+
+      // ---------- Guides ----------
+      if (p === '/guide/api/guides' && req.method === 'GET') {
+        return json(res, 200, guides.map((g) => ({ ...g, anzahl: st.filter((s) => s.guide === g.id).length }))), true;
+      }
+      if (p === '/guide/api/guide' && req.method === 'POST') {
+        const d = await jsonKoerper(req);
+        const neu = { id: neueId(), titel: String(d.titel || 'Neuer Guide').slice(0, 200), beschreibung: String(d.beschreibung || '').slice(0, 2000) };
+        schreib(GUIDES, [...guides, neu]);
+        return json(res, 200, neu), true;
+      }
+      const g = teile[2] === 'guide' && ID.test(id || '') ? guides.find((x) => x.id === id) : null;
+      if (g && teile.length === 4 && req.method === 'PUT') {
+        const d = await jsonKoerper(req);
+        if (typeof d.titel === 'string') g.titel = d.titel.slice(0, 200);
+        if (typeof d.beschreibung === 'string') g.beschreibung = d.beschreibung.slice(0, 2000);
+        schreib(GUIDES, guides);
+        return json(res, 200, g), true;
+      }
+      if (g && teile.length === 4 && req.method === 'DELETE') {
+        if (guides.length === 1) return json(res, 400, { fehler: 'Der letzte Guide bleibt bestehen' }), true;
+        st.filter((s) => s.guide === g.id).forEach((s) => dateienVon(s).forEach(loesche));
+        schreib(STATIONEN, st.filter((s) => s.guide !== g.id));
+        schreib(GUIDES, guides.filter((x) => x !== g));
+        schreib(RUNDEN, lies(RUNDEN, []).filter((x) => x.guide !== g.id));
+        return json(res, 200, { ok: true }), true;
+      }
+
+      // ---------- Stationen ----------
+      const s = teile[2] === 'station' && ID.test(id || '') ? st.find((x) => x.id === id) : null;
 
       if (p === '/guide/api/station' && req.method === 'POST') {
-        const neu = { id: neueId(), titel: 'Neue Station', text: '', audio: null, fotos: [] };
+        const d = await jsonKoerper(req);
+        if (!guides.some((x) => x.id === d.guide)) return json(res, 400, { fehler: 'Unbekannter Guide' }), true;
+        const neu = { id: neueId(), guide: d.guide, titel: 'Neue Station', text: '', quelle: '', ton: { sprecher: null, ki: null }, fotos: [], zeitreise: leereZeitreise() };
         st.push(neu); schreib(STATIONEN, st);
         return json(res, 200, neu), true;
       }
-      if (teile[2] === 'station' && s && teile.length === 4) {
+      if (s && teile.length === 4) {
         if (req.method === 'PUT') {
-          const d = JSON.parse((await koerper(req, 100000)).toString('utf8'));
+          const d = await jsonKoerper(req);
           if (typeof d.titel === 'string') s.titel = d.titel.slice(0, 200);
           if (typeof d.text === 'string') s.text = d.text.slice(0, 20000);
+          if (typeof d.quelle === 'string') s.quelle = d.quelle.slice(0, 500);
+          // Bildunterschriften: { datei: text } für Fotos und Früher/Heute-Bilder
+          if (d.bildtexte && typeof d.bildtexte === 'object') {
+            for (const bild of [...s.fotos, s.zeitreise.frueher, s.zeitreise.heute].filter(Boolean)) {
+              if (typeof d.bildtexte[bild.datei] === 'string') bild.text = d.bildtexte[bild.datei].slice(0, 500);
+            }
+          }
           schreib(STATIONEN, st);
           return json(res, 200, s), true;
         }
         if (req.method === 'DELETE') {
-          loesche(s.audio); s.fotos.forEach(loesche);
+          dateienVon(s).forEach(loesche);
           schreib(STATIONEN, st.filter((x) => x !== s));
           return json(res, 200, { ok: true }), true;
         }
       }
-      if (teile[2] === 'station' && s && teile[4] === 'audio' && req.method === 'PUT') {
-        const roh = path.join(DATEN, 'upload-' + neueId());
-        fs.writeFileSync(roh, await koerper(req, 60 * 1024 * 1024));
-        const datei = neueId() + '.mp3';
-        try { await zuMp3(roh, path.join(MEDIEN, datei)); } finally { fs.rm(roh, { force: true }, () => {}); }
-        loesche(s.audio); s.audio = datei; schreib(STATIONEN, st);
-        return json(res, 200, s), true;
+      // Ton: /station/ID/ton/sprecher oder /station/ID/ton/ki
+      if (s && teile[4] === 'ton' && STIMMEN.includes(teile[5]) && teile.length === 6) {
+        const stimme = teile[5];
+        if (req.method === 'PUT') {
+          const roh = path.join(DATEN, 'upload-' + neueId());
+          fs.writeFileSync(roh, await koerper(req, 60 * 1024 * 1024));
+          const datei = neueId() + '.mp3';
+          try { await zuMp3(roh, path.join(MEDIEN, datei)); } finally { fs.rm(roh, { force: true }, () => {}); }
+          loesche(s.ton[stimme]); s.ton[stimme] = datei; schreib(STATIONEN, st);
+          return json(res, 200, s), true;
+        }
+        if (req.method === 'DELETE') {
+          loesche(s.ton[stimme]); s.ton[stimme] = null; schreib(STATIONEN, st);
+          return json(res, 200, s), true;
+        }
       }
-      if (teile[2] === 'station' && s && teile[4] === 'audio' && req.method === 'DELETE') {
-        loesche(s.audio); s.audio = null; schreib(STATIONEN, st);
-        return json(res, 200, s), true;
-      }
-      if (teile[2] === 'station' && s && teile[4] === 'foto' && req.method === 'POST') {
+      if (s && teile[4] === 'foto' && req.method === 'POST' && teile.length === 5) {
         if (s.fotos.length >= MAX_FOTOS) return json(res, 400, { fehler: `Höchstens ${MAX_FOTOS} Fotos` }), true;
-        const daten = await koerper(req, 15 * 1024 * 1024);
-        if (daten[0] !== 0xff || daten[1] !== 0xd8) return json(res, 400, { fehler: 'Kein JPEG' }), true;
-        const datei = neueId() + '.jpg';
-        fs.writeFileSync(path.join(MEDIEN, datei), daten);
-        s.fotos.push(datei); schreib(STATIONEN, st);
+        const datei = await jpegSpeichern(req);
+        s.fotos.push({ datei, text: String(url.searchParams.get('text') || '').slice(0, 500) }); schreib(STATIONEN, st);
         return json(res, 200, s), true;
       }
-      if (teile[2] === 'station' && s && teile[4] === 'foto' && req.method === 'DELETE' && s.fotos.includes(teile[5])) {
-        loesche(teile[5]); s.fotos = s.fotos.filter((f) => f !== teile[5]); schreib(STATIONEN, st);
+      if (s && teile[4] === 'foto' && req.method === 'DELETE' && s.fotos.some((f) => f.datei === teile[5])) {
+        loesche(teile[5]); s.fotos = s.fotos.filter((f) => f.datei !== teile[5]); schreib(STATIONEN, st);
         return json(res, 200, s), true;
+      }
+      // Früher/Heute: /station/ID/zeitreise/frueher oder /heute
+      if (s && teile[4] === 'zeitreise' && SEITEN.includes(teile[5]) && teile.length === 6) {
+        const seite = teile[5];
+        if (req.method === 'PUT') {
+          const datei = await jpegSpeichern(req);
+          if (s.zeitreise[seite]) loesche(s.zeitreise[seite].datei);
+          s.zeitreise[seite] = { datei, text: String(url.searchParams.get('text') || '').slice(0, 500) };
+          schreib(STATIONEN, st);
+          return json(res, 200, s), true;
+        }
+        if (req.method === 'DELETE') {
+          if (s.zeitreise[seite]) loesche(s.zeitreise[seite].datei);
+          s.zeitreise[seite] = null; schreib(STATIONEN, st);
+          return json(res, 200, s), true;
+        }
       }
       if (p === '/guide/api/reihenfolge' && req.method === 'PUT') {
-        const ids = JSON.parse((await koerper(req, 100000)).toString('utf8'));
-        const neu = ids.map((i) => st.find((x) => x.id === i)).filter(Boolean);
-        if (neu.length !== st.length) return json(res, 400, { fehler: 'Reihenfolge unvollständig' }), true;
-        schreib(STATIONEN, neu);
+        const d = await jsonKoerper(req);
+        const eigene = st.filter((x) => x.guide === d.guide);
+        const neu = (d.ids || []).map((i) => eigene.find((x) => x.id === i)).filter(Boolean);
+        if (!eigene.length || neu.length !== eigene.length) return json(res, 400, { fehler: 'Reihenfolge unvollständig' }), true;
+        schreib(STATIONEN, [...st.filter((x) => x.guide !== d.guide), ...neu]);
         return json(res, 200, { ok: true }), true;
       }
 
+      // ---------- Runden ----------
       if (p === '/guide/api/runden' && req.method === 'GET') {
         return json(res, 200, lies(RUNDEN, []).filter((x) => x.bis > Date.now())), true;
       }
       if (p === '/guide/api/runde' && req.method === 'POST') {
-        const d = JSON.parse((await koerper(req, 1000)).toString('utf8') || '{}');
+        const d = await jsonKoerper(req);
+        if (!guides.some((x) => x.id === d.guide)) return json(res, 400, { fehler: 'Unbekannter Guide' }), true;
         const stunden = Math.min(Math.max(Number(d.stunden) || 4, 1), 24 * 14);
         let code = '';
         for (const b of crypto.randomBytes(6)) code += ZEICHEN[b % ZEICHEN.length];
-        const neu = { code, bis: Date.now() + stunden * 3600 * 1000 };
+        const neu = { code, bis: Date.now() + stunden * 3600 * 1000, guide: d.guide };
         schreib(RUNDEN, [...lies(RUNDEN, []).filter((x) => x.bis > Date.now()), neu]);
         return json(res, 200, neu), true;
       }

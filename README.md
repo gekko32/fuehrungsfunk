@@ -24,9 +24,30 @@ Alles läuft in **einem** Container: Node-App, ffmpeg und Icecast (nur intern er
 | `/status` | Live-Anzeige, Zuhörerzahl |
 | `/hoer-mp4` (WebSocket) | Hörer-Seite: AAC in MP4, schneller Weg für Chrome, Firefox, Safari |
 | `/hoer-ws`, `/stream` | Rückfall: MP3 per WebSocket bzw. normaler Audio-Strom |
-| `/guide` | Teilnehmer: Audioguide |
-| `/guide/verwalten?k=SENDE_TOKEN` | Frank: Stationen und Runden pflegen |
+| `/guide` | Teilnehmer: der Guide, den ihre Runde freischaltet |
+| `/guide?k=SENDE_TOKEN&g=GUIDE-ID` | Frank: Vorschau eines bestimmten Guides |
+| `/guide/verwalten?k=SENDE_TOKEN` | Frank: Guides, Stationen und Runden pflegen |
 | `/g/CODE` | QR-Code einer Runde |
+
+## Audioguide: mehrere Guides (seit 22.11.2026)
+
+Es kann beliebig viele Guides geben (z. B. Hauptführung, Ergänzungen, andere Sprache). Jede Runde gehört zu genau einem Guide; die Gruppe sieht nur diesen und kommt auch nur an dessen Bilder und Töne.
+
+Je Station:
+- **Text** (wird angezeigt und ist die Vorlage zum Vorlesen) und **Quelle**
+- **Zwei Tonspuren**: `sprecher` (Originalstimme, wird bevorzugt) und `ki` (KI-Stimme). Läuft die KI-Spur, steht für die Teilnehmer „Gelesen von einer KI-Stimme“ daneben. Gibt es beide, können sie umschalten.
+- **Bis zu 3 Fotos** mit Bildunterschrift
+- **Früher/Heute** (`zeitreise`): zwei Bilder vom gleichen Standpunkt, Teilnehmer schieben einen Regler. Feld `art` ist heute immer `bild`; `panorama` ist für spätere 360°-Ansichten reserviert und wird noch nicht angezeigt.
+
+Daten in `daten/`: `guides.json`, `stationen.json` (Feld `guide`), `runden.json` (Feld `guide`), Medien in `daten/medien/`. Ältere Daten (ein Guide, Feld `audio`) werden beim Start einmalig umgestellt: alles landet im Guide „Audioguide“, die alte Aufnahme wird zur Originalstimme.
+
+**Guide einspielen** (Inhalte liegen nicht in diesem öffentlichen Repo):
+
+```
+SENDE_TOKEN=... node werkzeuge/guide-import.js https://funk.mentolder.de ORDNER
+```
+
+`ORDNER/guide.json` beschreibt Titel, Stationen, Bilder (JPEG) und optional Tondateien; Aufbau im Kopf von `werkzeuge/guide-import.js`. Gibt es den Titel schon, bricht das Werkzeug ab.
 
 ## Einstellungen
 
